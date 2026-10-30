@@ -1,0 +1,54 @@
+.emoji-picker-window {
+  background-color: @theme_bg_color;
+  border: 1px solid alpha(@theme_fg_color, 0.22);
+  border-radius: 12px;
+}
+
+.category-button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 3px;
+  font-size: 16px;
+}
+
+.emoji-flow-child {
+  border-radius: 8px;
+}
+
+.emoji-flow-child:selected {
+  background-color: alpha(@theme_selected_bg_color, 0.35);
+}
+
+.emoji-cell {
+  min-width: 48px;
+  min-height: 44px;
+  padding: 3px;
+  border-radius: 8px;
+  font-family: "Noto Color Emoji", "Noto Emoji", sans-serif;
+  font-size: 24px;
+}
+
+.emoji-cell:hover {
+  background-color: alpha(@theme_fg_color, 0.10);
+}
+
+.favorite-toggle {
+  min-width: 14px;
+  min-height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #e5a50a;
+  font-size: 10px;
+}
+
+.empty-label {
+  color: alpha(@theme_fg_color, 0.55);
+  font-size: 15px;
+}
+
+.picker-footer {
+  color: alpha(@theme_fg_color, 0.58);
+  font-size: 11px;
+}
+

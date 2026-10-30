@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Custom Emoji Picker
+Comment=Search and insert Unicode emoji
+Exec=@LAUNCHER@ --show
+Icon=face-smile
+Terminal=false
+Categories=Utility;GTK;
+StartupNotify=false
+

@@ -1,0 +1,13 @@
+# Upstream checkouts kept here for convenience; they have their own repos.
+/t3code/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

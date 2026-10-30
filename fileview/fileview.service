@@ -1,0 +1,10 @@
+[Unit]
+Description=Tailnet file viewer for agent links
+
+[Service]
+ExecStart=/usr/bin/python3 -u %h/Code/fileview/fileview.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

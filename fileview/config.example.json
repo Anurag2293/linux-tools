@@ -1,0 +1,19 @@
+{
+  "public_url": "https://my-machine.my-tailnet.ts.net",
+  "machine": "my-machine",
+  "local_clients": [
+    "100.64.0.1"
+  ],
+  "editors": {
+    "100.64.0.2": [
+      [
+        "VS Code",
+        "vscode://vscode-remote/ssh-remote+my-machine{path}:{line}"
+      ],
+      [
+        "Cursor",
+        "cursor://vscode-remote/ssh-remote+my-machine{path}:{line}"
+      ]
+    ]
+  }
+}
