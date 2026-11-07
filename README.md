@@ -7,6 +7,7 @@ self-contained tool with its own README and install steps.
 | --- | --- |
 | [custom-emoji-picker](custom-emoji-picker/) | Keyboard-first GTK emoji picker |
 | [fileview](fileview/) | Tailnet file viewer behind agent links (systemd user service) |
+| [lens](lens/) | Translate everything on screen in place (Japanese to English) |
 | [snap-corner](snap-corner/) | Native GTK screenshot tool |
 
 ## Conventions
