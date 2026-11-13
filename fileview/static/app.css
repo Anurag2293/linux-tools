@@ -201,6 +201,9 @@ main { min-width: 0; animation: fv-in .18s ease both; }
 main.doc { padding: 44px 56px 120px; }
 main.doc > *, main.doc .md { max-width: 780px; margin-left: auto; margin-right: auto; }
 .content.has-toc main.doc > * { margin-right: 0; }
+.content.has-toc.toc-left { grid-template-columns: 240px minmax(0, 1fr); }
+.content.has-toc.toc-left .toc { order: -1; padding: 44px 8px 24px 24px; }
+.content.has-toc.toc-left main.doc > * { margin-right: auto; margin-left: 0; }
 main.code { padding: 0; }
 main.frame { height: 100%; display: flex; }
 .content:has(> main.frame) { overflow: hidden; }
@@ -231,10 +234,10 @@ main.doc .callout { margin: 0 auto 24px; }
 main.code .hl { min-height: 100%; overflow: visible; }
 .hl span[id^="L-"] { display: block; padding-right: 32px; }
 .hl .linenos { display: inline-block; position: sticky; left: 0; min-width: 4.2em; padding: 0 16px 0 0; margin-right: 8px;
-  text-align: right; color: var(--faint); background: var(--bg); user-select: none; cursor: pointer; opacity: .75; }
-.hl .linenos:hover { color: var(--fg); opacity: 1; }
+  text-align: right; color: color-mix(in srgb, var(--faint) 75%, var(--bg)); background: var(--bg); user-select: none; cursor: pointer; }
+.hl .linenos:hover { color: var(--fg); }
 .hl span.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--sel-edge); }
-.hl span.sel .linenos { background: transparent; color: var(--fg); opacity: 1; }
+.hl span.sel .linenos { background: linear-gradient(var(--sel), var(--sel)) var(--bg); box-shadow: inset 2px 0 0 var(--sel-edge); color: var(--fg); }
 .wrap main.code .hl pre { width: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wrap main.code .hl span[id^="L-"] { padding-left: calc(4.2em + 24px); text-indent: calc(-4.2em - 24px); }
 .wrap main.code .hl .linenos { position: static; text-indent: 0; }
@@ -288,6 +291,7 @@ main.code .hl { min-height: 100%; overflow: visible; }
 .toc a.l3 { padding-left: 24px; font-size: 12.5px; }
 .toc a:hover { color: var(--fg); }
 .toc a.on { color: var(--fg); border-left-color: var(--fg); }
+.toc .ib.tocside { width: 24px; height: 24px; margin-left: auto; }
 
 /* folders */
 .listing { max-width: 1040px; margin: 0 auto; }

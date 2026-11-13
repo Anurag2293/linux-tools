@@ -85,8 +85,15 @@ EDITORS.update({ip: [tuple(e) for e in editors] for ip, editors in CONFIG.get("e
 DENY_DIRS = {".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store", "keyrings"}
 DENY_FILE = re.compile(
     r"^(\.env(\..+)?|.*\.pem|.*\.key|id_(rsa|ed25519|ecdsa)(\.pub)?|\.netrc|\.git-credentials"
-    r"|\.?credentials(\.json)?|auth\.json|hosts\.yml)$"
+    r"|\.?credentials(\.json)?|auth\.json|hosts\.yml|\.npmrc|\.pypirc|.*_history|.*\.keyring|.*\.kdbx"
+    r"|.*\.p12|.*\.pfx)$"
 )
+# Dot-entries of the home folder hold credentials and app state, so only these are served.
+HOME_HIDDEN_ALLOW = re.compile(CONFIG.get("home_hidden_allow") or (
+    r"^(\.claude/(CLAUDE\.md|skills(/.*)?|projects/[^/]+/memory(/.*)?)"
+    r"|\.t3/(worktrees(/.*)?|userdata/attachments(/.*)?))$"
+))
+HOME_DENY_TOP = {"snap"}
 ALLOW_FILE = re.compile(r".*\.(example|sample|template)$")
 TREE_HIDE = {".git", "__pycache__", ".DS_Store"}
 TREE_MAX = 2000
@@ -142,6 +149,11 @@ def is_denied(real):
         return True
     if "/.config/gh" in real or real.endswith("/.claude/.credentials.json"):
         return True
+    if real.startswith(HOME + os.sep):
+        rel = real[len(HOME) + 1:]
+        top = rel.split(os.sep)[0]
+        if top in HOME_DENY_TOP or (top.startswith(".") and not HOME_HIDDEN_ALLOW.match(rel)):
+            return True
     name = parts[-1]
     return bool(DENY_FILE.match(name)) and not ALLOW_FILE.match(name)
 
@@ -670,7 +682,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"label": label, "tpl": tpl.replace("{path}", urllib.parse.quote(path))}
                 for label, tpl in EDITORS.get(self.client_ip(), [])],
             "transient": transient, "public": PUBLIC, "machine": MACHINE, "roots": ROOTS, "types": TYPE_OF,
-            "git": git_info(path) if code == 200 else None,
+            "git": git_info(path) if code == 200 else None, "build": asset("app.js") + asset("app.css"),
         }
         hit = _index.get(parts["root"])
         if not hit or time.time() - hit[0] > INDEX_TTL:

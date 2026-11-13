@@ -6,7 +6,7 @@
   var root_ = document.documentElement;
   var mobile = matchMedia('(max-width: 820px)');
   var page = JSON.parse($('#fv').textContent);
-  var TYPES = page.types, ROOTS = page.roots, PUBLIC = page.public, MACHINE = page.machine;
+  var BUILD = page.build, TYPES = page.types, ROOTS = page.roots, PUBLIC = page.public, MACHINE = page.machine;
   var isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
   var store = {
@@ -432,12 +432,15 @@
     var hs = $$('.md h2, .md h3', main);
     if (main.className !== 'doc' || hs.length < 2) { content.classList.remove('has-toc'); toc.innerHTML = ''; return; }
     var seen = {};
-    toc.innerHTML = '<div class="t">' + icon('list') + 'On this page</div>' + hs.map(function (h) {
+    var left = store.get('tocLeft', false);
+    toc.innerHTML = '<div class="t">' + icon('list') + 'On this page' +
+      '<button class="ib tocside" data-tocside title="Move outline to the ' + (left ? 'right' : 'left') + '">' + icon(left ? 'right' : 'left') + '</button></div>' + hs.map(function (h) {
       if (!h.id) { var s = slug(h.textContent), k = s; while (seen[k] || document.getElementById(k)) k = s + '-' + (seen[s] = (seen[s] || 0) + 1); h.id = k; }
       seen[h.id] = 1;
       return '<a class="l' + h.tagName[1] + '" href="#' + esc(h.id) + '" data-toc>' + esc(h.textContent) + '</a>';
     }).join('');
     content.classList.add('has-toc');
+    content.classList.toggle('toc-left', left);
     var links = {}; $$('a', toc).forEach(function (a) { links[a.getAttribute('href').slice(1)] = a; });
     spy = new IntersectionObserver(function (entries) {
       entries.forEach(function (en) {
@@ -447,6 +450,7 @@
     hs.forEach(function (h) { spy.observe(h); });
   }
   toc.addEventListener('click', function (e) {
+    if (e.target.closest('[data-tocside]')) { store.set('tocLeft', !store.get('tocLeft', false)); buildToc(); return; }
     var a = e.target.closest('a[data-toc]'); if (!a) return;
     e.preventDefault();
     var t = document.getElementById(a.getAttribute('href').slice(1));
@@ -532,6 +536,7 @@
         if (!(r.headers.get('content-type') || '').includes('application/json')) { location.href = u.href; return; }
         return r.json().then(function (p) {
           var fin = new URL(r.url); fin.hash = u.hash;
+          if (p.build && p.build !== BUILD) { location.href = fin.href; return; }  // app updated: full load
           history.replaceState(null, '', fin.pathname + fin.search + fin.hash);
           loaded = fin.pathname + fin.search;
           show(p, { top: opts.top });
