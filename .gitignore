@@ -1,6 +1,9 @@
 # Upstream checkouts kept here for convenience; they have their own repos.
 /t3code/
 
+# Local-only. Internal Grafana redirect; not part of this repo.
+/kao-redirect/
+
 # Python
 __pycache__/
 *.py[cod]
