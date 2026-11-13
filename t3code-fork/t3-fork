@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+# Re-apply the fork/desktop UI patches onto the stock nightly the desktop app just
+# updated to, and swap the patched AppImage in. See FORK.md.
+#
+#   t3-fork run [--force]   rebuild if the installed AppImage is stock, then restart the app
+#   t3-fork restart         restart the desktop app (10 s warning)
+#   t3-fork rollback        put the last stock AppImage back
+#   t3-fork status          installed version, fork or stock, last result
+set -euo pipefail
+
+REPO=${T3_FORK_REPO:-$HOME/Code/t3code}
+BUILD=${T3_FORK_BUILD:-$REPO/.worktrees/fork-build}
+BRANCH=fork/desktop
+APPIMAGE=${T3_FORK_APPIMAGE:-$HOME/Applications/T3-Code-Nightly.AppImage}
+STATE=${T3_FORK_STATE:-$HOME/.t3/fork}
+NODE_BIN=${T3_FORK_NODE:-$HOME/.nvm/versions/node/v26.12.1/bin}
+JOBS=${T3_FORK_JOBS:-4}
+
+mkdir -p "$STATE/logs"
+LOG=${T3_FORK_LOG:-$STATE/logs/$(date +%Y%m%d-%H%M%S).log}
+
+log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$LOG" >&2; }
+notify() {
+  command -v notify-send >/dev/null && notify-send -a "T3 fork" "$1" "$2" 2>/dev/null || true
+}
+die() {
+  log "FAILED: $*"
+  notify "T3 fork build failed" "$*"
+  echo "failed: $*" >"$STATE/last-result"
+  exit 1
+}
+
+# Electron's headers need C++20; Ubuntu 20.04's default g++ 9 lacks it.
+CXX_ENV=()
+command -v g++-10 >/dev/null && CXX_ENV=(CC=gcc-10 CXX=g++-10)
+
+with_build_env() {
+  env "${CXX_ENV[@]}" PATH="$NODE_BIN:$BUILD/node_modules/.bin:$HOME/.cargo/bin:$PATH" \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CARGO_BUILD_JOBS=$JOBS MAKEFLAGS=-j$JOBS JOBS=$JOBS \
+    T3CODE_TELEMETRY_CHANNEL=dev nice -n 10 "$@"
+}
+
+step() {
+  local name=$1
+  shift
+  log "-- $name"
+  ("$@") >>"$LOG" 2>&1 || die "$name (log: $LOG)"
+}
+
+sha_of() { sha256sum "$1" | cut -d' ' -f1; }
+
+# Records every file this script puts in place, fork or stock, so the next run leaves it alone.
+place() {
+  local src=$1 kind=$2
+  cp "$src" "$APPIMAGE.fork-tmp"
+  chmod +x "$APPIMAGE.fork-tmp"
+  sha_of "$APPIMAGE.fork-tmp" >"$STATE/placed.sha256"
+  echo "$kind" >"$STATE/placed.kind"
+  mv -f "$APPIMAGE.fork-tmp" "$APPIMAGE"
+  stat -c '%i %s %Y' "$APPIMAGE" >"$STATE/placed.stamp"
+}
+
+# Reads X-AppImage-Version from the embedded .desktop file without extracting the app.
+appimage_version() {
+  local tmp
+  tmp=$(mktemp -d)
+  (cd "$tmp" && "$1" --appimage-extract '*.desktop' >/dev/null 2>&1) || true
+  sed -n 's/^X-AppImage-Version=//p' "$tmp"/squashfs-root/*.desktop 2>/dev/null | head -1
+  rm -rf "$tmp"
+}
+
+cmd_run() {
+  local force=0
+  [[ ${1:-} == --force ]] && force=1
+  exec 9>"$STATE/lock"
+  flock -n 9 || { log "another run is in progress"; exit 0; }
+
+  # The updater unlinks and then moves the new file in; wait for it to settle.
+  [[ -x $APPIMAGE ]] || exit 0
+  (($(date +%s) - $(stat -c %Y "$APPIMAGE") > 60)) || exit 0
+  local stamp
+  stamp=$(stat -c '%i %s %Y' "$APPIMAGE")
+  if [[ $force -eq 0 && $stamp == "$(cat "$STATE/placed.stamp" 2>/dev/null)" ]]; then
+    exit 0
+  fi
+  local seen_sha
+  seen_sha=$(sha_of "$APPIMAGE")
+  if [[ $force -eq 0 && $seen_sha == "$(cat "$STATE/placed.sha256" 2>/dev/null)" ]]; then
+    echo "$stamp" >"$STATE/placed.stamp"
+    exit 0
+  fi
+
+  local version tag
+  version=$(appimage_version "$APPIMAGE")
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]] ||
+    die "installed AppImage has unexpected version '$version'"
+  tag=v$version
+  log "installed AppImage is $version; building fork"
+
+  git -C "$REPO" fetch -q origin "refs/tags/$tag:refs/tags/$tag" >>"$LOG" 2>&1 ||
+    die "cannot fetch tag $tag"
+  local base old_tip
+  base=$(git -C "$REPO" describe --tags --abbrev=0 --match 'v*-nightly.*' "$BRANCH") ||
+    die "cannot find the nightly tag under $BRANCH"
+  old_tip=$(git -C "$REPO" rev-parse "$BRANCH")
+
+  [[ -d $BUILD ]] || git -C "$REPO" worktree add -q --detach "$BUILD" "$old_tip"
+  cd "$BUILD"
+  git reset -q --hard
+  git clean -qfdx -e node_modules -e target -e .env
+  git checkout -q --detach "$old_tip"
+  if [[ $base != "$tag" ]] && ! git rebase -q --onto "$tag" "$base" >>"$LOG" 2>&1; then
+    local conflicts
+    conflicts=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+    git rebase --abort || true
+    die "patch conflicts with $tag in: ${conflicts:-unknown files}. Stock app left in place."
+  fi
+  local new_tip
+  new_tip=$(git rev-parse HEAD)
+
+  cp .env.example .env
+  step "install deps" with_build_env corepack pnpm install --frozen-lockfile --child-concurrency=$JOBS
+  step "stamp version" with_build_env node scripts/update-release-package-versions.ts "$version"
+  step "build web, server, desktop" with_build_env vp run --concurrency-limit "$JOBS" build:desktop
+  step "build resource monitor" with_build_env cargo build -q --locked --release \
+    --manifest-path native/resource-monitor/Cargo.toml --target x86_64-unknown-linux-gnu
+  rm -rf release
+  step "build AppImage" with_build_env env T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR=1 \
+    T3CODE_DESKTOP_UPDATE_REPOSITORY=pingdotgg/t3code \
+    node scripts/build-desktop-artifact.ts --platform linux --target AppImage --arch x64 \
+    --build-version "$version" --skip-build
+  local built
+  built=$(ls "$BUILD"/release/*.AppImage 2>/dev/null | head -1)
+  [[ -n $built ]] || die "no AppImage produced"
+  git reset -q --hard
+
+  log "-- verify"
+  [[ $(appimage_version "$built") == "$version" ]] || die "built AppImage does not report $version"
+  local tmp
+  tmp=$(mktemp -d)
+  (cd "$tmp" && "$built" --appimage-extract >/dev/null) || die "cannot extract built AppImage"
+  local app=$tmp/squashfs-root
+  [[ -f $app/resources/app-update.yml ]] || die "built AppImage has no update feed"
+  grep -rqs --include='*.js' 'BookMarked' "$app/resources/app.asar.unpacked" "$app/resources" ||
+    grep -aqs 'book-marked' "$app/resources/app.asar" || die "patch not found in the built bundle"
+  ELECTRON_RUN_AS_NODE=1 "$app/t3code" -e \
+    "require('$app/resources/app.asar.unpacked/node_modules/node-pty')" >>"$LOG" 2>&1 ||
+    die "node-pty in the built AppImage does not load on this machine"
+  rm -rf "$tmp"
+
+  [[ $(sha_of "$APPIMAGE") == "$seen_sha" ]] ||
+    die "the installed AppImage changed during the build; the next timer run rebuilds"
+  if [[ $seen_sha != "$(cat "$STATE/placed.sha256" 2>/dev/null)" || $(cat "$STATE/placed.kind" 2>/dev/null) != fork ]]; then
+    cp -f "$APPIMAGE" "$STATE/stock.AppImage"
+    echo "$version" >"$STATE/stock.version"
+  fi
+  place "$built" fork
+
+  if [[ $(git -C "$REPO" rev-parse "$BRANCH") == "$old_tip" ]]; then
+    git -C "$REPO" update-ref "refs/heads/$BRANCH" "$new_tip" "$old_tip"
+  else
+    log "$BRANCH moved during the run; left it alone"
+  fi
+  echo "installed: fork $version" >"$STATE/last-result"
+  log "installed fork $version"
+  cmd_restart
+}
+
+# The Electron main process of the running desktop app: exe inside the AppImage mount, no --type.
+desktop_pid() {
+  local p exe
+  for p in /proc/[0-9]*; do
+    exe=$(readlink "$p/exe" 2>/dev/null) || continue
+    [[ $exe == /tmp/.mount_T3-Cod*/t3code ]] || continue
+    tr '\0' ' ' <"$p/cmdline" 2>/dev/null | grep -q -- '--type=' && continue
+    echo "${p#/proc/}"
+    return 0
+  done
+  return 1
+}
+
+# Only the desktop client restarts; the T3 server and its agent threads keep running.
+cmd_restart() {
+  local pid
+  pid=$(desktop_pid) || { log "desktop app not running; nothing to restart"; return 0; }
+  notify "T3 Code restarts in 10 seconds" "Installing the fork build."
+  sleep 10
+  pid=$(desktop_pid) || pid=""
+  if [[ -n $pid ]]; then
+    kill -TERM "$pid"
+    local i
+    for i in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      log "desktop app (pid $pid) did not quit within 30 s; not relaunching"
+      notify "T3 Code did not quit" "Restart it yourself to use the fork build."
+      return 0
+    fi
+  fi
+  # Its own unit, so the app outlives this oneshot service.
+  systemd-run --user --quiet --collect --unit="t3code-desktop-$(date +%s)" "$HOME/.local/bin/t3code" ||
+    { log "relaunch failed"; notify "T3 Code relaunch failed" "Start T3 Code yourself."; return 0; }
+  log "desktop app restarted"
+}
+
+cmd_rollback() {
+  [[ -f $STATE/stock.AppImage ]] || { echo "no stock AppImage saved"; exit 1; }
+  place "$STATE/stock.AppImage" stock
+  echo "rolled back: stock $(cat "$STATE/stock.version")" >"$STATE/last-result"
+  echo "Stock $(cat "$STATE/stock.version") restored; restart T3 Code. The next stock update (or t3-fork run --force) rebuilds the fork."
+}
+
+cmd_status() {
+  local kind="stock, not yet rebuilt"
+  [[ $(sha_of "$APPIMAGE") == "$(cat "$STATE/placed.sha256" 2>/dev/null)" ]] && kind=$(cat "$STATE/placed.kind")
+  echo "installed: $(appimage_version "$APPIMAGE") ($kind)"
+  echo "branch:    $BRANCH on $(git -C "$REPO" describe --tags --abbrev=0 --match 'v*-nightly.*' "$BRANCH" 2>/dev/null)"
+  echo "last:      $(cat "$STATE/last-result" 2>/dev/null || echo none)"
+}
+
+case ${1:-} in
+  run) shift; cmd_run "$@" ;;
+  restart) cmd_restart ;;
+  rollback) cmd_rollback ;;
+  status) cmd_status ;;
+  *) sed -n '2,9p' "$0"; exit 2 ;;
+esac

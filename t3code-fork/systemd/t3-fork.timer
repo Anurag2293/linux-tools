@@ -1,0 +1,9 @@
+[Unit]
+Description=Rebuild the T3 Code desktop fork after a stock update
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

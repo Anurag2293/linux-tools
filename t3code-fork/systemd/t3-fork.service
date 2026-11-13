@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-apply the T3 Code desktop fork onto the installed nightly
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/t3-fork run
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=8G
+MemoryMax=10G
+TimeoutStartSec=1h
