@@ -1,0 +1,6 @@
+{
+  "uuid": "snap-corner@anurag",
+  "name": "Snap Corner shortcuts",
+  "description": "Runs Snap Corner shortcuts in every Shell mode, including open menus and the notification list.",
+  "shell-version": ["3.36"]
+}

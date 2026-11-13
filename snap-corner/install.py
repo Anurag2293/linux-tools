@@ -16,6 +16,8 @@ BACKUP = HOME / ".local/share/snap-corner/install-backup.json"
 SCHEMA = "org.gnome.settings-daemon.plugins.media-keys"
 CUSTOM = SCHEMA + ".custom-keybinding"
 PREFIX = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/"
+EXTENSION_UUID = "snap-corner@anurag"
+EXTENSION = HOME / ".local/share/gnome-shell/extensions" / EXTENSION_UUID
 BINDINGS = [(PREFIX + "snap-corner-area/", "Snap Corner: capture area", "<Control><Alt>s", "--area"),
             (PREFIX + "snap-corner-screen/", "Snap Corner: capture screen", "<Control><Alt>f", "--screen")]
 
@@ -52,12 +54,24 @@ def install():
     for path, name, accelerator, argument in BINDINGS:
         binding = Gio.Settings.new_with_path(CUSTOM, path)
         binding.set_string("name", name)
-        binding.set_string("binding", accelerator)
+        # The Shell extension owns the accelerators so they also work while menus are open.
+        binding.set_string("binding", "")
         binding.set_string("command", str(LAUNCHER) + " " + argument)
         if path not in paths:
             paths.append(path)
     settings.set_strv("custom-keybindings", paths)
+    if EXTENSION.is_symlink():
+        EXTENSION.unlink()
+    elif EXTENSION.exists():
+        raise SystemExit("Refusing to overwrite an existing installation file: " + str(EXTENSION))
+    EXTENSION.parent.mkdir(parents=True, exist_ok=True)
+    EXTENSION.symlink_to(SOURCE / "extension")
+    shell = Gio.Settings.new("org.gnome.shell")
+    enabled = list(shell.get_strv("enabled-extensions"))
+    if EXTENSION_UUID not in enabled:
+        shell.set_strv("enabled-extensions", enabled + [EXTENSION_UUID])
     Gio.Settings.sync()
+    print("Restart GNOME Shell once (Alt+F2, r, Enter) to load the shortcut extension.")
     print("Installed Snap Corner. Ctrl+Alt+S: area; Ctrl+Alt+F: current screen.")
 
 
@@ -78,6 +92,12 @@ def uninstall():
             paths.remove(path)
     settings.set_strv("custom-keybindings", paths)
     Gio.Settings.sync()
+    shell = Gio.Settings.new("org.gnome.shell")
+    shell.set_strv("enabled-extensions",
+                   [uuid for uuid in shell.get_strv("enabled-extensions") if uuid != EXTENSION_UUID])
+    Gio.Settings.sync()
+    if EXTENSION.is_symlink():
+        EXTENSION.unlink()
     for path in (LAUNCHER, DESKTOP, AUTOSTART, BACKUP):
         path.unlink(missing_ok=True)
     print("Removed Snap Corner launcher, shortcuts, and autostart. Screenshots are kept.")

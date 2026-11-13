@@ -39,6 +39,15 @@ def image_fit(image, width, height):
                               GdkPixbuf.InterpType.BILINEAR)
 
 
+def close_shell_popups():
+    try:
+        Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync(
+            "org.gnome.Shell", "/com/anurag/SnapCorner", "com.anurag.SnapCorner.Shell",
+            "ClosePopups", None, None, Gio.DBusCallFlags.NONE, 1000, None)
+    except GLib.Error:
+        pass
+
+
 class Selection(Gtk.Window):
     def __init__(self, app, snapshot, root_width, root_height):
         super().__init__(type=Gtk.WindowType.POPUP)
@@ -70,12 +79,29 @@ class Selection(Gtk.Window):
         self.show_all()
         window = self.get_window()
         window.set_cursor(Gdk.Cursor.new_from_name(self.get_display(), "crosshair"))
-        self.seat = self.get_display().get_default_seat()
-        result = self.seat.grab(window, Gdk.SeatCapabilities.POINTER |
-                                Gdk.SeatCapabilities.KEYBOARD, False, None, None, None)
-        if result != Gdk.GrabStatus.SUCCESS:
-            self.destroy()
-            raise RuntimeError("Desktop input is busy. Release the keys and try again.")
+        self.attempts = 0
+        if not self.grab():
+            # A Shell menu (e.g. the notification list) owns input; close it and retry.
+            close_shell_popups()
+            GLib.timeout_add(50, self.retry_grab)
+
+    def grab(self):
+        seat = self.get_display().get_default_seat()
+        result = seat.grab(self.get_window(), Gdk.SeatCapabilities.POINTER |
+                           Gdk.SeatCapabilities.KEYBOARD, False, None, None, None)
+        if result == Gdk.GrabStatus.SUCCESS:
+            self.seat = seat
+        return self.seat is not None
+
+    def retry_grab(self):
+        if self.app.selector is not self or self.grab():
+            return False
+        self.attempts += 1
+        if self.attempts < 30:
+            return True
+        self.destroy()
+        self.app.report_error(RuntimeError("Desktop input is busy. Close open menus and try again."))
+        return False
 
     def rectangle(self):
         x0, y0 = self.origin

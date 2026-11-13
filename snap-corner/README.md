@@ -6,6 +6,9 @@ Python 3, PyGObject, GTK 3, and Cairo; no pip packages, browser, or root access.
 - **Ctrl+Alt+S**: freeze the desktop, then drag to select an area. Escape or
   right-click cancels.
 - **Ctrl+Alt+F**: capture the monitor under the mouse pointer.
+- Both shortcuts also work while a Shell menu (such as the notification list) is
+  open. A small Shell extension in `extension/` owns the keys; for area capture
+  it closes the menu after the freeze so you can select.
 - A preview appears at the bottom right of the captured monitor. Drag the
   **picture** into T3 Code's message input, Slack, a file manager, or another app
   that accepts image files. It offers both a PNG file URI and PNG image data.
