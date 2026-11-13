@@ -16,7 +16,8 @@ config.example.json. Without one, fileview serves localhost only.
 Query flags: ?view (stay in the browser), ?src (source of md/html), ?raw (bytes),
 ?embed (html page itself), ?ls (directory entries as JSON), ?find=q (file search),
 ?pages (page images of a .docx), ?page=N (one page or slide as PNG),
-?media=ppt/media/x.mp4 (a video embedded in a .pptx, overlaid on its slide).
+?media=ppt/media/x.mp4 (a video embedded in a .pptx, overlaid on its slide),
+?api (the file or folder as JSON for the Android app; add &src for source, &pages for .docx pages).
 Slides and pages come from LibreOffice -> PDF -> pdftoppm, cached in ~/.cache/fileview.
 The X-FV-Partial header returns a page as JSON for in-app navigation.
 UI assets live in static/ next to this script and are served at /_fv/static/.
@@ -50,6 +51,7 @@ import openpyxl
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name, get_lexer_for_filename
+from pygments.token import STANDARD_TYPES
 from pygments.util import ClassNotFound
 
 HOST = "127.0.0.1"
@@ -447,6 +449,79 @@ def sheet_table(ws):
     return f'<div class="grid sheet-grid"><table>{"".join(out)}</table></div>', note
 
 
+def token_lines(text, lexer):
+    """Highlighted text as lines of [class, text, class, text, ...] using pygments' short class names."""
+    def short(t):
+        while t not in STANDARD_TYPES:
+            t = t.parent
+        return STANDARD_TYPES[t]
+
+    lines, cur = [], []
+    for ttype, value in lexer.get_tokens(text):
+        cls = short(ttype)
+        for i, part in enumerate(value.split("\n")):
+            if i:
+                lines.append(cur)
+                cur = []
+            if part:
+                cur += [cls, part]
+    lines.append(cur)
+    return lines[:max(1, len(text.splitlines()))]
+
+
+def sheet_json(ws):
+    """One worksheet as rows of cells; a cell is a string or {t, b, i, bg, fg, a, n, rs, cs}, null when merged away."""
+    rows = [r for r in ws.iter_rows(max_row=min(ws.max_row, SHEET_ROWS), max_col=min(ws.max_column, SHEET_COLS))]
+    last_row = max((i for i, r in enumerate(rows, 1) if any(c.value is not None for c in r)), default=0)
+    last_col = max((c.column for r in rows[:last_row] for c in r if c.value is not None), default=0)
+    spans, covered = {}, set()
+    for rng in ws.merged_cells.ranges:
+        spans[(rng.min_row, rng.min_col)] = (rng.max_row - rng.min_row + 1, rng.max_col - rng.min_col + 1)
+        covered.update((r, c) for r in range(rng.min_row, rng.max_row + 1)
+                       for c in range(rng.min_col, rng.max_col + 1) if (r, c) != (rng.min_row, rng.min_col))
+    cols = [c for c in range(1, last_col + 1)
+            if not ws.column_dimensions[openpyxl.utils.get_column_letter(c)].hidden]
+    out = []
+    for r, row in enumerate(rows[:last_row], 1):
+        if ws.row_dimensions[r].hidden:
+            continue
+        cells, by_col = [], {cell.column: cell for cell in row}
+        for c in cols:
+            cell = by_col.get(c)
+            if (r, c) in covered:
+                cells.append(None)
+                continue
+            text = cell_text(cell) if cell is not None else ""
+            style = {}
+            if cell is not None:
+                fill = cell.fill
+                bg = argb(fill.fgColor) if fill is not None and fill.fill_type == "solid" else None
+                fg = argb(cell.font.color) if cell.font is not None else None
+                if bg and bg.upper() != "#FFFFFF":
+                    style.update(bg=bg, fg=fg or "#000000")
+                elif fg:
+                    style["fg"] = fg
+                if cell.font is not None and cell.font.b:
+                    style["b"] = 1
+                if cell.font is not None and cell.font.i:
+                    style["i"] = 1
+                align = cell.alignment.horizontal if cell.alignment is not None else None
+                if align in ("left", "center", "right"):
+                    style["a"] = align
+                if isinstance(cell.value, (int, float)) and not isinstance(cell.value, bool):
+                    style["n"] = 1
+                rs, cs = spans.get((r, c), (1, 1))
+                if rs > 1:
+                    style["rs"] = rs
+                if cs > 1:
+                    style["cs"] = cs
+            cells.append(dict(style, t=text) if style else text)
+        out.append({"n": r, "c": cells})
+    clipped = ws.max_row > SHEET_ROWS or ws.max_column > SHEET_COLS
+    return {"name": ws.title, "cols": [openpyxl.utils.get_column_letter(c) for c in cols], "rows": out,
+            "note": f"Showing the first {SHEET_ROWS} rows and {SHEET_COLS} columns." if clipped else ""}
+
+
 _index, _index_lock = {}, threading.Lock()
 
 
@@ -570,6 +645,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def send(self, code, body, ctype="text/html; charset=utf-8", headers=None):
         data = body.encode() if isinstance(body, str) else body
+        if ctype == "application/json" and len(data) > 16384 and "gzip" in self.headers.get("Accept-Encoding", ""):
+            data = gzip.compress(data, 5)
+            headers = dict(headers or {}, **{"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
@@ -624,14 +702,23 @@ class Handler(BaseHTTPRequestHandler):
 
         real = os.path.realpath(path)
         if not inside_roots(real) or is_denied(real):
+            if "api" in query:
+                return self.send_json(403, {"error": "Not allowed"})
             return self.respond(403, path, empty_state("lock", "Not allowed", "This path is outside the shared folders."),
                                 kind="empty")
         if not os.path.exists(real):
+            if "api" in query:
+                return self.send_json(404, {"error": "Not found"})
             return self.respond(404, path, empty_state("search", "Not found", "No file or folder at this path."),
                                 kind="empty")
 
         if "git" in query:
             return self.send_json(200, {"git": git_info(real)})
+        if "api" in query:
+            try:
+                return self.api(path, real, line, end, query)
+            except PermissionError:
+                return self.send_json(403, {"error": "Permission denied"})
 
         local = self.client_ip() in LOCAL_CLIENTS and "view" not in query and not self.partial
         if os.path.isdir(real):
@@ -778,6 +865,67 @@ class Handler(BaseHTTPRequestHandler):
         if len(entries) > TREE_MAX:
             body["more"] = len(entries) - TREE_MAX
         self.send_json(200, body)
+
+    def api(self, path, real, line, end, query):
+        st = os.stat(real)
+        is_dir = os.path.isdir(real)
+        if is_dir:
+            path = path.rstrip("/") + "/"
+        name = os.path.basename(path.rstrip("/")) or "/"
+        ext = os.path.splitext(name)[1].lower()
+        out = {"path": path, "name": name, "size": st.st_size, "mtime": int(st.st_mtime), "line": line, "end": end,
+               "root": tree_root(path), "git": git_info(real), "public": PUBLIC, "machine": MACHINE}
+        want_src = "src" in query
+
+        if is_dir:
+            entries = self.entries(real)
+            out.update(kind="folder", entries=[
+                {"n": e.name, "d": d, "s": 0 if d else s.st_size, "m": int(s.st_mtime)}
+                for e, d, s in entries[:TREE_MAX]], more=max(0, len(entries) - TREE_MAX))
+        elif ext in IMAGE_EXTS:
+            out.update(kind="image", lang="Image")
+        elif ext in VIDEO_EXTS:
+            out.update(kind="video", lang="Video")
+        elif ext in (".html", ".htm") and not want_src:
+            out.update(kind="html", lang="HTML")
+        elif ext in SLIDE_EXTS or ext == ".pdf" or ext == ".docx" and "pages" in query:
+            try:
+                out.update(kind="pages", count=len(page_images(real)))
+            except (OSError, subprocess.SubprocessError):
+                out.update(kind="file", note="Conversion failed.")
+            out["lang"] = {".pdf": "PDF", ".docx": "Word document"}.get(ext, "Presentation")
+        elif ext == ".docx":
+            with open(real, "rb") as f:
+                out.update(kind="markdown", lang="Word document", text=mammoth.convert_to_markdown(f).value)
+        elif ext in SHEET_EXTS:
+            try:
+                wb = openpyxl.load_workbook(real, data_only=True)
+            except Exception as e:  # openpyxl raises a zoo of types on odd files
+                sys.stderr.write(f"xlsx failed: {real}: {e!r}\n")
+                out.update(kind="file", note="Could not read this workbook.")
+            else:
+                sheets = [ws for ws in wb.worksheets if ws.sheet_state == "visible"] or wb.worksheets
+                out.update(kind="sheet", lang="Spreadsheet", sheets=[sheet_json(ws) for ws in sheets])
+                wb.close()
+        elif ext in DOWNLOAD_EXTS:
+            out.update(kind="file", note="No preview for this file type.")
+        else:
+            text, note = read_text(real)
+            out["note"] = note
+            if text is None:
+                out["kind"] = "file"
+            elif ext in (".md", ".markdown") and not want_src and line is None:
+                out.update(kind="markdown", lang="Markdown", text=text)
+            elif ext in (".csv", ".tsv") and not want_src:
+                reader = csv.reader(io.StringIO(text), delimiter="\t" if ext == ".tsv" else ",")
+                rows = [row for _, row in zip(range(CSV_ROWS + 1), reader)]
+                out.update(kind="table", lang=ext[1:].upper(), rows=rows)
+            elif len(text) > MAX_HIGHLIGHT:
+                out.update(kind="code", lang="Plain text", lines=[["", t] for t in text.splitlines()] or [[]])
+            else:
+                lexer = lexer_for(real, text)
+                out.update(kind="code", lang=lexer.name, lines=token_lines(text, lexer))
+        self.send_json(200, out)
 
     def listing(self, path, real):
         try:

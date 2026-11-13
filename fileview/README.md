@@ -54,3 +54,18 @@ After editing, run `systemctl --user restart fileview`. Asset URLs carry the fil
 browsers pick up CSS and JS changes on reload.
 
 Caches (slide PNGs, extracted media) live in `~/.cache/fileview`.
+
+## Android app
+
+`android/` is a native Kotlin (Jetpack Compose) client for Android phones on the tailnet. It opens
+fileview links instead of the browser and renders folders, code, Markdown, sheets, slides, PDFs,
+images and video natively, using the `?api` JSON endpoint. Set the server URL in
+`android/gradle.properties` (`fileviewHome`), then build with JDK 17 and the Android SDK:
+
+```bash
+cd android && echo "sdk.dir=$HOME/Android/Sdk" > local.properties
+JAVA_HOME=~/.local/jdk17 ./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+On Android 12+, allow the app to open the fileview host under App info > Open by default.
