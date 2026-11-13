@@ -924,6 +924,7 @@ class Handler(BaseHTTPRequestHandler):
                 out.update(kind="code", lang="Plain text", lines=[["", t] for t in text.splitlines()] or [[]])
             else:
                 lexer = lexer_for(real, text)
+                lexer.stripnl = False
                 out.update(kind="code", lang=lexer.name, lines=token_lines(text, lexer))
         self.send_json(200, out)
 

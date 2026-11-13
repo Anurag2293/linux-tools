@@ -65,7 +65,7 @@ object Actions {
         toast(ctx, "Fetching ${node.name}…")
         scope.launch {
             try {
-                val file = File(ctx.cacheDir, "open/${node.mtime}/${node.name}")
+                val file = File(ctx.cacheDir, "open/${node.path.hashCode()}-${node.mtime}/${node.name}")
                 if (!file.exists() || file.length() != node.size) Net.fetch(node.path, file)
                 val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", file)
                 val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime(node.name))

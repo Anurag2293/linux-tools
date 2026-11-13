@@ -101,7 +101,7 @@ private fun PageScreen(vm: AppModel, page: Page, onSearch: () -> Unit) {
         Box(Modifier.padding(top = pad.calculateTopPadding()).fillMaxSize()) {
             val error = page.error
             when {
-                node != null -> Content(vm, page, node)
+                node != null -> key(page) { Content(vm, page, node) }
                 error != null -> Message(Icons.Outlined.CloudOff, "Can't open this", error, "Retry") { vm.reload(page) }
                 else -> Loading(page.loc.path)
             }
