@@ -1,7 +1,7 @@
 # macos-look
 
 Makes the GNOME 3.36 desktop (Ubuntu 20.04, X11) look like macOS: WhiteSur-Dark theme, icons
-and cursors, the Inter font, window buttons on the left, Ubuntu Dock at the bottom, and a small
+and cursors, the Inter font, WhiteSur window buttons at the top right, Ubuntu Dock at the bottom, and a small
 Shell extension that moves the clock to the right and shows notification banners top-right.
 
 ## What it changes
@@ -11,14 +11,14 @@ Shell extension that moves the clock to the right and shows notification banners
 | App and shell theme | WhiteSur-Dark (GTK 2/3 and Shell), Ubuntu logo on Activities | `~/.themes/WhiteSur-Dark*`, User Themes extension |
 | Icons, cursor | WhiteSur-dark, WhiteSur-cursors | `~/.local/share/icons/` |
 | Font | Inter 10 for UI and documents, Inter Semi-Bold 10 for title bars | `~/.local/share/fonts/Inter/` |
-| Window buttons | Left side: close, minimize, maximize | `settings.ini` |
+| Window buttons | Top right: minimize, maximize, close | `settings.ini` |
 | Wallpaper | WhiteSur-dark, desktop and lock screen | `~/.local/share/backgrounds/WhiteSur-dark.jpg` |
 | Dock | Ubuntu Dock at the bottom, 44px icons, auto-hide, gray running dots, click shows window previews | `settings.ini` |
 | Clock | Weekday and 12-hour time, at the right end of the top bar | `settings.ini`, `extension/` |
 | Notifications | Banners in the top-right corner | `extension/` |
 | Launchers | `StartupWMClass` fixed for Slack, Chrome Beta and one Chrome app so the dock matches their windows | `~/.local/share/applications/` |
 | VS Code | `"window.controlsStyle": "custom"` keeps its buttons on the right | `~/.config/Code/User/settings.json` |
-| T3 Code | Traffic lights in T3's own top bar | `t3code/` (see below) |
+| T3 Code | Traffic lights at the top right of T3's own top bar | `t3code/` (see below) |
 
 `settings.ini` is a `dconf` file: every gsettings value this tool sets is in it.
 
