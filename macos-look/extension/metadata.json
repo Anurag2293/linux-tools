@@ -1,0 +1,6 @@
+{
+  "uuid": "mac-layout@anurag",
+  "name": "Mac layout",
+  "description": "Moves the clock to the right end of the top bar and shows notification banners in the top-right corner.",
+  "shell-version": ["3.36"]
+}

@@ -9,6 +9,7 @@ self-contained tool with its own README and install steps.
 | [fileview](fileview/) | Tailnet file viewer behind agent links (systemd user service) |
 | [gh-event-log](gh-event-log/) | Log your GitHub PR activity via `gh` and serve it read-only on the tailnet |
 | [lens](lens/) | Translate everything on screen in place (Japanese to English) |
+| [macos-look](macos-look/) | macOS look for GNOME 3.36: WhiteSur theme, bottom dock, clock and banners on the right |
 | [snap-corner](snap-corner/) | Native GTK screenshot tool |
 
 ## Conventions

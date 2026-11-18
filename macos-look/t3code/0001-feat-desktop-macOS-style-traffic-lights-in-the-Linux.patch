@@ -1,0 +1,307 @@
+From 507e7427685649c16211ce999c16a34e0fc156d0 Mon Sep 17 00:00:00 2001
+From: Anurag Dhote <anuragdhote392@gmail.com>
+Date: Tue, 17 Nov 2026 19:30:21 +0900
+Subject: [PATCH] feat(desktop): macOS-style traffic lights in the Linux top
+ bar
+
+Linux windows drop Electron's window controls overlay and draw close,
+minimize and maximize as traffic lights in T3's own top bar, using the
+same left inset macOS reserves for its native buttons.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ apps/desktop/src/ipc/DesktopIpcHandlers.ts    |  2 +
+ apps/desktop/src/ipc/channels.ts              |  1 +
+ apps/desktop/src/ipc/methods/window.ts        | 16 +++++
+ apps/desktop/src/preload.ts                   |  1 +
+ apps/desktop/src/window/DesktopWindow.ts      |  9 ++-
+ apps/web/src/components/AppSidebarLayout.tsx  | 16 +++--
+ .../src/components/LinuxWindowControls.tsx    | 72 +++++++++++++++++++
+ apps/web/src/lib/utils.ts                     |  4 ++
+ packages/contracts/src/ipc.ts                 |  1 +
+ 9 files changed, 115 insertions(+), 7 deletions(-)
+ create mode 100644 apps/web/src/components/LinuxWindowControls.tsx
+
+diff --git a/apps/desktop/src/ipc/DesktopIpcHandlers.ts b/apps/desktop/src/ipc/DesktopIpcHandlers.ts
+index fe65edd0ee..2a39b91199 100644
+--- a/apps/desktop/src/ipc/DesktopIpcHandlers.ts
++++ b/apps/desktop/src/ipc/DesktopIpcHandlers.ts
+@@ -58,6 +58,7 @@ import {
+   setTheme,
+   syncHtmlFullscreen,
+   showContextMenu,
++  windowControl,
+ } from "./methods/window.ts";
+ import {
+   acknowledgeSnapShot,
+@@ -164,6 +165,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
+   yield* ipc.handle(pasteAsText);
+   yield* ipc.handle(revealWindow);
+   yield* ipc.handle(syncHtmlFullscreen);
++  yield* ipc.handle(windowControl);
+   yield* ipc.handle(probeRemoteEditors);
+   yield* ipc.handle(getUpdateState);
+   yield* ipc.handle(setUpdateChannel);
+diff --git a/apps/desktop/src/ipc/channels.ts b/apps/desktop/src/ipc/channels.ts
+index d8652bd199..2a3dea2fb9 100644
+--- a/apps/desktop/src/ipc/channels.ts
++++ b/apps/desktop/src/ipc/channels.ts
+@@ -12,6 +12,7 @@ export const PROBE_REMOTE_EDITORS_CHANNEL = "desktop:probe-remote-editors";
+ export const MENU_ACTION_CHANNEL = "desktop:menu-action";
+ export const PASTE_AS_TEXT_CHANNEL = "desktop:paste-as-text";
+ export const REVEAL_WINDOW_CHANNEL = "desktop:reveal-window";
++export const WINDOW_CONTROL_CHANNEL = "desktop:window-control";
+ export const SNAP_SHOT_EVENT_CHANNEL = "desktop:snap-shot-event";
+ export const WEB_LINK_OPEN_CHANNEL = "desktop:web-link-open";
+ export const WEB_LINK_READY_CHANNEL = "desktop:web-link-ready";
+diff --git a/apps/desktop/src/ipc/methods/window.ts b/apps/desktop/src/ipc/methods/window.ts
+index 2545cb9dc5..50fa29fdc8 100644
+--- a/apps/desktop/src/ipc/methods/window.ts
++++ b/apps/desktop/src/ipc/methods/window.ts
+@@ -503,6 +503,22 @@ export const revealWindow = DesktopIpc.makeIpcMethod({
+   }),
+ });
+ 
++export const windowControl = DesktopIpc.makeIpcMethod({
++  channel: IpcChannels.WINDOW_CONTROL_CHANNEL,
++  payload: Schema.Literals(["minimize", "toggle-maximize", "close"]),
++  result: Schema.Void,
++  handler: (action, event) =>
++    Effect.sync(() => {
++      const sender = event && Electron.webContents.fromId(event.sender.id);
++      const window = sender && Electron.BrowserWindow.fromWebContents(sender);
++      if (!window || window.isDestroyed()) return;
++      if (action === "minimize") window.minimize();
++      else if (action === "close") window.close();
++      else if (window.isMaximized()) window.unmaximize();
++      else window.maximize();
++    }).pipe(Effect.withSpan("desktop.ipc.window.windowControl")),
++});
++
+ const htmlFullscreenStates = new WeakMap<
+   Electron.BrowserWindow,
+   { owned: boolean; leaving: boolean }
+diff --git a/apps/desktop/src/preload.ts b/apps/desktop/src/preload.ts
+index b4b15f6a7a..c928a6f534 100644
+--- a/apps/desktop/src/preload.ts
++++ b/apps/desktop/src/preload.ts
+@@ -136,6 +136,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
+     return () => ipcRenderer.removeListener(IpcChannels.TRACKPAD_SCROLL_END_CHANNEL, handler);
+   },
+   revealWindow: () => ipcRenderer.invoke(IpcChannels.REVEAL_WINDOW_CHANNEL),
++  windowControl: (action) => ipcRenderer.invoke(IpcChannels.WINDOW_CONTROL_CHANNEL, action),
+   getPrimaryPasteEnabled: () => primaryPasteEnabled,
+   getSystemLocale: () => {
+     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
+diff --git a/apps/desktop/src/window/DesktopWindow.ts b/apps/desktop/src/window/DesktopWindow.ts
+index 4628be44d5..c3e1c5a5ef 100644
+--- a/apps/desktop/src/window/DesktopWindow.ts
++++ b/apps/desktop/src/window/DesktopWindow.ts
+@@ -331,6 +331,10 @@ function getWindowTitleBarOptions(
+     };
+   }
+ 
++  if (platform === "linux") {
++    return { titleBarStyle: "hidden" };
++  }
++
+   return {
+     titleBarStyle: "hidden",
+     titleBarOverlay: {
+@@ -837,11 +841,14 @@ export const make = Effect.gen(function* () {
+         if (direction === "left" && history.canGoBack()) history.goBack();
+         else if (direction === "right" && history.canGoForward()) history.goForward();
+       });
++    }
++
++    if (environment.platform === "darwin" || environment.platform === "linux") {
+       window.on("enter-full-screen", () => {
+         window.webContents.send(WINDOW_FULLSCREEN_STATE_CHANNEL, true);
+       });
+       window.on("leave-full-screen", () => {
+-        syncMacosWindowButtons(window);
++        if (environment.platform === "darwin") syncMacosWindowButtons(window);
+         window.webContents.send(WINDOW_FULLSCREEN_STATE_CHANNEL, false);
+       });
+     }
+diff --git a/apps/web/src/components/AppSidebarLayout.tsx b/apps/web/src/components/AppSidebarLayout.tsx
+index 8e4baf2045..cbb51752f9 100644
+--- a/apps/web/src/components/AppSidebarLayout.tsx
++++ b/apps/web/src/components/AppSidebarLayout.tsx
+@@ -29,7 +29,7 @@ import { isTerminalFocused } from "../lib/terminalFocus";
+ import { isModelPickerOpen } from "../modelPickerVisibility";
+ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
+ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+-import { cn, isMacPlatform } from "../lib/utils";
++import { cn, isLinuxPlatform, isMacPlatform } from "../lib/utils";
+ import { primaryServerKeybindingsAtom } from "../state/server";
+ import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
+ import {
+@@ -39,6 +39,7 @@ import {
+ } from "../panelAnimations";
+ import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
+ import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
++import { LinuxWindowControls } from "./LinuxWindowControls";
+ import ThreadSidebar from "./Sidebar";
+ import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
+ import { isAppModalPage } from "./sidebar/mainAppLocation";
+@@ -80,13 +81,14 @@ function readViewportWidth(): number {
+ // Cache the synchronous fullscreen IPC read until subscription.
+ let windowFullscreenSnapshot: boolean | null = null;
+ 
+-function macosDesktopBridge() {
+-  if (!isElectron || !isMacPlatform(navigator.platform)) return null;
++function trafficLightsDesktopBridge() {
++  if (!isElectron || !(isMacPlatform(navigator.platform) || isLinuxPlatform(navigator.platform)))
++    return null;
+   return window.desktopBridge ?? null;
+ }
+ 
+ function subscribeToWindowFullscreen(onChange: () => void): () => void {
+-  const bridge = macosDesktopBridge();
++  const bridge = trafficLightsDesktopBridge();
+   if (
+     typeof bridge?.getWindowFullscreenState !== "function" ||
+     typeof bridge.onWindowFullscreenStateChange !== "function"
+@@ -107,7 +109,7 @@ function subscribeToWindowFullscreen(onChange: () => void): () => void {
+ 
+ function readWindowFullscreen(): boolean {
+   if (windowFullscreenSnapshot === null) {
+-    const getWindowFullscreenState = macosDesktopBridge()?.getWindowFullscreenState;
++    const getWindowFullscreenState = trafficLightsDesktopBridge()?.getWindowFullscreenState;
+     windowFullscreenSnapshot =
+       typeof getWindowFullscreenState === "function" ? getWindowFullscreenState() : false;
+   }
+@@ -429,6 +431,7 @@ export function AppSidebarLayout({
+   const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
+   const routePanelAnimationsActive = panelAnimationsActive && !panelAnimationsSuppressed;
+   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
++  const isLinuxDesktop = isElectron && isLinuxPlatform(navigator.platform);
+   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
+   // A clamped drag may not change width, so viewport changes need a separate subscription.
+   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
+@@ -448,7 +451,7 @@ export function AppSidebarLayout({
+     readWindowFullscreen,
+   );
+   const windowControlsInsetStyle = (
+-    isMacosDesktop && !isWindowFullscreen
++    (isMacosDesktop || isLinuxDesktop) && !isWindowFullscreen
+       ? { "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET }
+       : {}
+   ) as CSSProperties;
+@@ -495,6 +498,7 @@ export function AppSidebarLayout({
+         {children}
+         <BackgroundThreadAnnouncer />
+         <SidebarControl showSidebar={showSidebar} />
++        {isLinuxDesktop && !isWindowFullscreen ? <LinuxWindowControls /> : null}
+         {isElectron ? <HistorySwipeNavigation /> : null}
+       </SidebarProvider>
+     </PanelAnimationSuppressionProvider>
+diff --git a/apps/web/src/components/LinuxWindowControls.tsx b/apps/web/src/components/LinuxWindowControls.tsx
+new file mode 100644
+index 0000000000..b1681cbeda
+--- /dev/null
++++ b/apps/web/src/components/LinuxWindowControls.tsx
+@@ -0,0 +1,72 @@
++import { useSyncExternalStore } from "react";
++
++import { cn } from "../lib/utils";
++
++const BUTTONS = [
++  {
++    action: "close",
++    label: "Close window",
++    color: "bg-[#ff5f57]",
++    hoverColor: "group-hover:bg-[#ff5f57]",
++    glyph: "M3.5 3.5l5 5M8.5 3.5l-5 5",
++  },
++  {
++    action: "minimize",
++    label: "Minimize window",
++    color: "bg-[#febc2e]",
++    hoverColor: "group-hover:bg-[#febc2e]",
++    glyph: "M2.5 6h7",
++  },
++  {
++    action: "toggle-maximize",
++    label: "Maximize window",
++    color: "bg-[#28c840]",
++    hoverColor: "group-hover:bg-[#28c840]",
++    glyph: "M6 2.5v7M2.5 6h7",
++  },
++] as const;
++
++function subscribeToWindowFocus(onChange: () => void): () => void {
++  window.addEventListener("focus", onChange);
++  window.addEventListener("blur", onChange);
++  return () => {
++    window.removeEventListener("focus", onChange);
++    window.removeEventListener("blur", onChange);
++  };
++}
++
++function readWindowFocus(): boolean {
++  return document.hasFocus();
++}
++
++export function LinuxWindowControls() {
++  const focused = useSyncExternalStore(subscribeToWindowFocus, readWindowFocus);
++  return (
++    <div className="group fixed top-[var(--workspace-controls-top)] left-4 z-50 flex h-[var(--workspace-topbar-height)] items-center gap-2 [-webkit-app-region:no-drag]">
++      {BUTTONS.map((button) => (
++        <button
++          key={button.action}
++          type="button"
++          aria-label={button.label}
++          className={cn(
++            "flex size-3 items-center justify-center rounded-full",
++            focused ? button.color : cn("bg-muted-foreground/40", button.hoverColor),
++          )}
++          onClick={() => void window.desktopBridge?.windowControl?.(button.action)}
++        >
++          <svg
++            viewBox="0 0 12 12"
++            // oxlint-disable-next-line shadcn/no-arbitrary-values -- traffic-light glyphs stay dark in both themes, as on macOS
++            className="size-3 text-[#0000008c] opacity-0 group-hover:opacity-100"
++            fill="none"
++            stroke="currentColor"
++            strokeWidth={1.3}
++            strokeLinecap="round"
++          >
++            <path d={button.glyph} />
++          </svg>
++        </button>
++      ))}
++    </div>
++  );
++}
+diff --git a/apps/web/src/lib/utils.ts b/apps/web/src/lib/utils.ts
+index 747af2d52d..ce9f5aad0f 100644
+--- a/apps/web/src/lib/utils.ts
++++ b/apps/web/src/lib/utils.ts
+@@ -20,6 +20,10 @@ export function cn(...inputs: CxOptions) {
+ 
+ export { isMacPlatform };
+ 
++export function isLinuxPlatform(platform: string): boolean {
++  return /^linux/i.test(platform);
++}
++
+ export function isWindowsPlatform(platform: string): boolean {
+   return /^win(dows)?/i.test(platform);
+ }
+diff --git a/packages/contracts/src/ipc.ts b/packages/contracts/src/ipc.ts
+index b44f8e77f2..e6386b5f57 100644
+--- a/packages/contracts/src/ipc.ts
++++ b/packages/contracts/src/ipc.ts
+@@ -1072,6 +1072,7 @@ export interface DesktopBridge {
+    * only the main process can spend a notification click's activation token.
+    */
+   revealWindow: () => Promise<void>;
++  windowControl?: (action: "minimize" | "toggle-maximize" | "close") => Promise<void>;
+   /**
+    * The OS locale as a BCP-47 tag, which the renderer cannot read for itself:
+    * the packaged app ships only the `en-US` Chromium locale pak, so
+-- 
+2.25.1
+
