@@ -34,8 +34,12 @@ Then restart GNOME Shell once (Alt+F2, `r`, Enter). The extension is symlinked t
 `~/.local/share/gnome-shell/extensions/mac-layout@anurag`, so editing `extension/` here edits the
 live copy (a Shell restart loads the change).
 
-Chrome needs one manual step: Settings, Appearance, Theme, GTK. Without it, Chrome app windows
-draw their own buttons instead of the WhiteSur ones.
+Chrome needs one manual step, because any other Chrome theme (including a color picked in
+"Customize Chrome") makes Chrome draw its own window buttons. Pick one in Settings, Appearance:
+
+- **Theme: GTK.** Chrome takes WhiteSur's colors and buttons.
+- **Use system title bar and borders: on.** Keeps any Chrome theme; GNOME draws a WhiteSur title
+  bar with the buttons above the tab strip, which costs one extra strip of height.
 
 ## T3 Code
 
