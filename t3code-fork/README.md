@@ -17,6 +17,10 @@ swaps it in. The T3 server is never touched.
 - The fork AppImage keeps the GitHub update feed (`app-update.yml`), so "Check for updates"
   works. When the next nightly lands, the app installs stock, and the next timer run sees the
   file change and rebuilds the fork on that version.
+- Each run also unmounts dead `/tmp/.mount_T3-*` folders. When the app relaunches itself after
+  an update, the new process inherits PATH entries for earlier AppImage mounts; once one of those
+  dies, looking up `xdg-open` fails with "Transport endpoint is not connected" and links stop
+  opening in the browser.
 - Public cloud config (Clerk key, relay URL) comes from the repo's `.env.example`, the same
   values the stock build uses.
 

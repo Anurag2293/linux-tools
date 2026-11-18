@@ -69,11 +69,25 @@ appimage_version() {
   rm -rf "$tmp"
 }
 
+# A relaunched app inherits PATH entries for earlier AppImage mounts; a dead one stops
+# command lookup (xdg-open for links) with ENOTCONN instead of moving on to /usr/bin.
+clear_dead_mounts() {
+  local m
+  for m in /tmp/.mount_T3-*; do
+    [[ -d $m ]] || continue
+    if ls "$m" 2>&1 >/dev/null | grep -q 'not connected'; then
+      fusermount -u -z "$m" && rmdir "$m" && log "removed dead mount $m"
+    fi
+  done
+  return 0
+}
+
 cmd_run() {
   local force=0
   [[ ${1:-} == --force ]] && force=1
   exec 9>"$STATE/lock"
   flock -n 9 || { log "another run is in progress"; exit 0; }
+  clear_dead_mounts
 
   # The updater unlinks and then moves the new file in; wait for it to settle.
   [[ -x $APPIMAGE ]] || exit 0
