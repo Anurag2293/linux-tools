@@ -58,6 +58,9 @@ if [[ ! -L $EXT ]]; then
     ln -s "$HERE/extension" "$EXT"
 fi
 
+mkdir -p ~/.config/gtk-3.0
+ln -sfn "$HERE/gtk-3.0.css" ~/.config/gtk-3.0/gtk.css
+
 dconf load / <"$HERE/settings.ini"
 
 python3 - "$UUID" user-theme@gnome-shell-extensions.gcampax.github.com <<'EOF'
@@ -74,9 +77,6 @@ fix_wm_class() {
     return 0
 }
 fix_wm_class slack.desktop Slack slack
-fix_wm_class google-chrome-beta.desktop google-chrome-beta Google-chrome-beta
-fix_wm_class chrome-cifhbcnohmdccbgoicgdjpfamggdegmo-Default.desktop \
-    crx_cifhbcnohmdccbgoicgdjpfamggdegmo chrome-cifhbcnohmdccbgoicgdjpfamggdegmo-Default
 
 vscode=~/.config/Code/User/settings.json
 if [[ -f $vscode ]] && ! grep -q '"window.controlsStyle"' "$vscode"; then
@@ -89,4 +89,4 @@ open(path, "w").write(text[:i] + '\n    "window.controlsStyle": "custom",' + tex
 EOF
 fi
 
-echo "Done. Restart GNOME Shell once (Alt+F2, r, Enter) if the extension is new."
+echo "Done. Restart GNOME Shell (Alt+F2, r, Enter) and any open GTK apps to pick up the changes."

@@ -1,7 +1,7 @@
 # macos-look
 
 Makes the GNOME 3.36 desktop (Ubuntu 20.04, X11) look like macOS: WhiteSur-Dark theme, icons
-and cursors, the Inter font, WhiteSur window buttons at the top right, Ubuntu Dock at the bottom, and a small
+and cursors, the Inter font, Ubuntu-style window buttons at the top right, Ubuntu Dock at the bottom, and a small
 Shell extension that moves the clock to the right and shows notification banners top-right.
 
 ## What it changes
@@ -11,14 +11,14 @@ Shell extension that moves the clock to the right and shows notification banners
 | App and shell theme | WhiteSur-Dark (GTK 2/3 and Shell), Ubuntu logo on Activities | `~/.themes/WhiteSur-Dark*`, User Themes extension |
 | Icons, cursor | WhiteSur-dark, WhiteSur-cursors | `~/.local/share/icons/` |
 | Font | Inter 10 for UI and documents, Inter Semi-Bold 10 for title bars | `~/.local/share/fonts/Inter/` |
-| Window buttons | Top right: minimize, maximize, close | `settings.ini` |
+| Window buttons | Top right: minimize, maximize, close, drawn Ubuntu (Yaru) style instead of WhiteSur's colored dots | `settings.ini`, `gtk-3.0.css` linked as `~/.config/gtk-3.0/gtk.css` |
 | Wallpaper | WhiteSur-dark, desktop and lock screen | `~/.local/share/backgrounds/WhiteSur-dark.jpg` |
 | Dock | Ubuntu Dock at the bottom, 44px icons, auto-hide, gray running dots, click shows window previews | `settings.ini` |
 | Clock | Weekday and 12-hour time, at the right end of the top bar | `settings.ini`, `extension/` |
 | Notifications | Banners in the top-right corner | `extension/` |
-| Launchers | `StartupWMClass` fixed for Slack, Chrome Beta and one Chrome app so the dock matches their windows | `~/.local/share/applications/` |
+| Launchers | `StartupWMClass` fixed for Slack so the dock matches its window | `~/.local/share/applications/` |
 | VS Code | `"window.controlsStyle": "custom"` keeps its buttons on the right | `~/.config/Code/User/settings.json` |
-| T3 Code | Traffic lights at the top right of T3's own top bar | `t3code/` (see below) |
+| T3 Code | Ubuntu-style buttons at the top right of T3's own top bar | `t3code/` (see below) |
 
 `settings.ini` is a `dconf` file: every gsettings value this tool sets is in it.
 
@@ -34,12 +34,12 @@ Then restart GNOME Shell once (Alt+F2, `r`, Enter). The extension is symlinked t
 `~/.local/share/gnome-shell/extensions/mac-layout@anurag`, so editing `extension/` here edits the
 live copy (a Shell restart loads the change).
 
-Chrome needs one manual step, because any other Chrome theme (including a color picked in
-"Customize Chrome") makes Chrome draw its own window buttons. Pick one in Settings, Appearance:
+Chrome needs one manual step: Settings, Appearance, Theme, GTK. Any other Chrome theme
+(including a color picked in "Customize Chrome") makes Chrome draw its own window buttons.
+"Use system title bar and borders" also works with any theme, at the cost of an extra strip.
 
-- **Theme: GTK.** Chrome takes WhiteSur's colors and buttons.
-- **Use system title bar and borders: on.** Keeps any Chrome theme; GNOME draws a WhiteSur title
-  bar with the buttons above the tab strip, which costs one extra strip of height.
+`gtk-3.0.css` is read when an app starts, so after changing it restart GNOME Shell (for the
+title bars it draws) and any open GTK apps (Nautilus, Chrome).
 
 ## T3 Code
 
@@ -56,7 +56,7 @@ The first install on rr-gazelle (2026-11-17) saved the previous state in
 1. Settings: `dconf load / < ~/.local/share/macos-look/dconf-before-20261117-1907.ini`.
 2. Launchers: copy `~/.local/share/macos-look/desktop-before/*` back to `~/.local/share/applications/`.
 3. VS Code: delete the `window.controlsStyle` line, or copy `vscode-settings-before.json` back.
-4. Extension: `rm ~/.local/share/gnome-shell/extensions/mac-layout@anurag`.
+4. Extension and buttons: `rm ~/.local/share/gnome-shell/extensions/mac-layout@anurag ~/.config/gtk-3.0/gtk.css`.
 5. Restart GNOME Shell.
 
 The themes, icons, font and wallpaper can stay installed; nothing uses them once the settings are

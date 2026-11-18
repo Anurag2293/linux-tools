@@ -1,0 +1,48 @@
+headerbar button.titlebutton.close,
+headerbar button.titlebutton.maximize,
+headerbar button.titlebutton.minimize {
+  min-width: 22px;
+  min-height: 22px;
+  margin: 0 3px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  box-shadow: none;
+  background-color: transparent;
+  background-image: none;
+  color: #dadada;
+  -gtk-icon-shadow: none;
+}
+
+headerbar button.titlebutton.maximize:hover,
+headerbar button.titlebutton.minimize:hover {
+  background-color: alpha(#ffffff, 0.15);
+}
+
+headerbar button.titlebutton.maximize:active,
+headerbar button.titlebutton.minimize:active {
+  background-color: alpha(#ffffff, 0.25);
+}
+
+headerbar button.titlebutton.maximize:backdrop,
+headerbar button.titlebutton.minimize:backdrop {
+  color: #9c9c9c;
+}
+
+headerbar button.titlebutton.close {
+  background-color: #e95420;
+  color: #ffffff;
+}
+
+headerbar button.titlebutton.close:hover {
+  background-color: #eb6637;
+}
+
+headerbar button.titlebutton.close:active {
+  background-color: #d14515;
+}
+
+headerbar button.titlebutton.close:backdrop {
+  background-color: #5a5757;
+  color: #bcbbbb;
+}
