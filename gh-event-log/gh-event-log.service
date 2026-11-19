@@ -1,0 +1,13 @@
+[Unit]
+Description=GitHub activity logger with read-only tailnet API
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -u -m gh_event_log
+WorkingDirectory=%h/Code/gh-event-log
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

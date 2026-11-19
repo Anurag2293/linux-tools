@@ -1,0 +1,23 @@
+{
+  "orgs": [
+    "my-org"
+  ],
+  "poll_interval_s": 120,
+  "backfill_days": 14,
+  "track_open_days": 60,
+  "full_refresh_every": 10,
+  "detail_batch_size": 8,
+  "db_path": "~/.local/share/gh-event-log/events.db",
+  "bind_host": "tailscale",
+  "bind_port": 8787,
+  "allowed_ips": [
+    "100.64.0.2"
+  ],
+  "require_tailscale_tags": [
+    "tag:my-agent"
+  ],
+  "body_max_chars": 4000,
+  "graphql_min_remaining": 500,
+  "rest_min_remaining": 200,
+  "max_backoff_s": 1800
+}
