@@ -5,6 +5,8 @@ import datetime
 import math
 import os
 from pathlib import Path
+import re
+import shutil
 import sys
 import tempfile
 
@@ -14,17 +16,24 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("GdkX11", "3.0")
-from gi.repository import Gdk, GdkPixbuf, GdkX11, Gio, GLib, Gtk
+from gi.repository import Gdk, GdkPixbuf, GdkX11, Gio, GLib, Gtk, Pango
+
+from editor import Editor
 
 
 APP_ID = "com.anurag.SnapCorner"
 MODES = ("--area", "--screen", "--background", "--quit")
+STACK_GAP = 10
+NAMING_PROMPT = ("Read image.png in the current directory. Reply with only a short descriptive "
+                 "file name for it: 3 to 7 lowercase words joined by hyphens that say what the "
+                 "picture shows, no extension, nothing else.")
 USAGE = "Usage: snap-corner [--area|--screen|--background|--quit]"
 CSS = b"""
 #snap-card { background: #20232b; color: #f4f4f5; border-radius: 12px;
              border: 1px solid #555966; padding: 10px; }
 #snap-card label { color: #f4f4f5; }
 #snap-card .hint { color: #bec3cf; font-size: 11px; }
+#snap-card .title { font-size: 12px; }
 #snap-card button { background: #343945; color: #f4f4f5; border: none;
                     box-shadow: none; text-shadow: none; border-radius: 6px;
                     padding: 4px 10px; min-height: 22px; }
@@ -188,16 +197,18 @@ class Selection(Gtk.Window):
             self.seat = None
         if self.app.selector is self:
             self.app.selector = None
+            self.app.show_previews()
 
 
 class Thumbnail(Gtk.Window):
-    def __init__(self, app, path, image, monitor):
+    def __init__(self, app, path, image, monitor, title="Screenshot saved"):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.app, self.path, self.image = app, path, image
         self.monitor = monitor
-        self.hovered = False
         self.dragging = False
+        self.drag_started = False
         self.drop_failed = False
+        self.uri_exported = False
         self.timer = 0
         self.set_title("Snap Corner — preview")
         self.set_decorated(False)
@@ -224,8 +235,11 @@ class Thumbnail(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         frame.add(box)
         header = Gtk.Box(spacing=8)
-        label = Gtk.Label(label="Screenshot saved", xalign=0)
-        header.pack_start(label, True, True, 0)
+        self.title = Gtk.Label(label=title, xalign=0)
+        self.title.set_ellipsize(Pango.EllipsizeMode.END)
+        self.title.set_max_width_chars(28)
+        self.title.get_style_context().add_class("title")
+        header.pack_start(self.title, True, True, 0)
         close = Gtk.Button(label="×")
         close.set_tooltip_text("Dismiss preview; the saved screenshot is kept")
         close.connect("clicked", lambda _: self.destroy())
@@ -234,7 +248,13 @@ class Thumbnail(Gtk.Window):
         self.drag_surface = Gtk.EventBox()
         self.small_image = image_fit(image, 288, 170)
         self.drag_surface.add(Gtk.Image.new_from_pixbuf(self.small_image))
-        self.drag_surface.set_tooltip_text("Drag this picture into a chat or another app")
+        self.drag_surface.set_tooltip_text("Drag into a chat or another app · Click to edit")
+        self.drag_surface.add_events(Gdk.EventMask.BUTTON_PRESS_MASK |
+                                     Gdk.EventMask.BUTTON_RELEASE_MASK)
+        self.drag_surface.connect("realize", lambda w: w.get_window().set_cursor(
+            Gdk.Cursor.new_from_name(w.get_display(), "pointer")))
+        self.drag_surface.connect("button-press-event", self.press)
+        self.drag_surface.connect("button-release-event", self.release)
         self.drag_surface.drag_source_set(Gdk.ModifierType.BUTTON1_MASK,
                                          [Gtk.TargetEntry.new("text/uri-list", 0, 0),
                                           Gtk.TargetEntry.new("image/png", 0, 1)],
@@ -244,20 +264,19 @@ class Thumbnail(Gtk.Window):
         self.drag_surface.connect("drag-failed", self.drag_failed)
         self.drag_surface.connect("drag-end", self.drag_end)
         box.pack_start(self.drag_surface, False, False, 0)
-        self.hint = Gtk.Label(label="Drag picture into an app · Copied to clipboard")
+        self.hint = Gtk.Label(label="Drag into an app · Click to edit · Copied")
         self.hint.get_style_context().add_class("hint")
         box.pack_start(self.hint, False, False, 0)
         actions = Gtk.Box(spacing=6)
-        for title, action in (("Copy", self.copy), ("Open", self.open),
+        for title, action in (("Edit", self.edit), ("Copy", self.copy), ("Open", self.open),
                               ("Folder", self.folder)):
             button = Gtk.Button(label=title)
             button.connect("clicked", action)
             actions.pack_start(button, True, True, 0)
         box.pack_start(actions, False, False, 0)
-        self.connect("size-allocate", self.position)
+        self.connect("size-allocate", lambda *a: app.layout())
         self.connect("destroy", self.cleanup)
         self.show_all()
-        self.position()
         self.arm_timer()
 
     def clear_background(self, widget, cr):
@@ -267,12 +286,6 @@ class Thumbnail(Gtk.Window):
         cr.set_operator(cairo.OPERATOR_OVER)
         return False
 
-    def position(self, *args):
-        area = self.monitor.get_workarea()
-        width, height = self.get_size()
-        self.move(max(area.x, area.x + area.width - width - 22),
-                  max(area.y, area.y + area.height - height - 22))
-
     def cancel_timer(self):
         if self.timer:
             GLib.source_remove(self.timer)
@@ -280,7 +293,7 @@ class Thumbnail(Gtk.Window):
 
     def arm_timer(self):
         self.cancel_timer()
-        if not self.hovered and not self.dragging:
+        if not self.app.hovered and not self.app.editing_on(self.monitor) and not self.dragging:
             self.timer = GLib.timeout_add_seconds(30, self.expire)
 
     def expire(self):
@@ -289,15 +302,26 @@ class Thumbnail(Gtk.Window):
         return False
 
     def enter(self, widget, event):
-        self.hovered = True
-        self.cancel_timer()
+        self.app.set_hovered(True)
         return False
 
     def leave(self, widget, event):
         if event.detail != Gdk.NotifyType.INFERIOR:
-            self.hovered = False
-            self.arm_timer()
+            self.app.set_hovered(False)
         return False
+
+    def press(self, widget, event):
+        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS:
+            self.drag_started = False
+        return False
+
+    def release(self, widget, event):
+        if event.button == 1 and not self.drag_started and not self.dragging:
+            self.edit(timestamp=event.time)
+        return False
+
+    def edit(self, *args, timestamp=Gdk.CURRENT_TIME):
+        self.app.edit(self.image, self.monitor, timestamp)
 
     def copy(self, *args):
         self.app.copy_image(self.image)
@@ -312,12 +336,14 @@ class Thumbnail(Gtk.Window):
 
     def drag_data(self, widget, context, selection, info, timestamp):
         if info == 0:
+            self.uri_exported = True
             selection.set_uris([self.path.as_uri()])
         else:
             selection.set_pixbuf(self.image)
 
     def drag_begin(self, widget, context):
         self.dragging = True
+        self.drag_started = True
         self.drop_failed = False
         self.cancel_timer()
         Gtk.drag_set_icon_pixbuf(context, image_fit(self.image, 160, 100), 24, 24)
@@ -336,15 +362,20 @@ class Thumbnail(Gtk.Window):
 
     def cleanup(self, *args):
         self.cancel_timer()
-        if self.app.preview is self:
-            self.app.preview = None
+        if self in self.app.previews:
+            self.app.previews.remove(self)
+            if self.app.hovered and not self.app.previews:
+                self.app.hovered = False
+            self.app.layout()
 
 
 class SnapCorner(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.selector = None
-        self.preview = None
+        self.previews = []
+        self.editors = []
+        self.hovered = False
         self.pending = 0
         self.held = False
 
@@ -371,8 +402,10 @@ class SnapCorner(Gtk.Application):
         if mode != "--background":
             if self.selector:
                 self.selector.destroy()
-            if self.preview:
-                self.preview.destroy()
+            # Keep the stack out of the frozen desktop image; it returns after capture.
+            for card in self.previews:
+                card.hide()
+            self.set_hovered(False)
             if self.pending:
                 GLib.source_remove(self.pending)
             # Let the shortcut modifiers and compositor settle before grabbing input.
@@ -397,9 +430,164 @@ class SnapCorner(Gtk.Application):
                 area = display.get_monitor_at_point(x, y).get_geometry()
                 self.finish_capture(snapshot, (area.x, area.y, area.width, area.height),
                                     width, height)
+                self.show_previews()
         except Exception as exc:
+            self.show_previews()
             self.report_error(exc)
         return False
+
+    def editing_on(self, monitor):
+        return any(editor.monitor == monitor for editor in self.editors)
+
+    def show_previews(self):
+        if self.selector:
+            return
+        for card in self.previews:
+            if not self.editing_on(card.monitor):
+                card.show()
+        self.layout()
+
+    def add_preview(self, card):
+        self.previews.append(card)
+        if self.editing_on(card.monitor):
+            card.hide()
+        self.layout()
+
+    def layout(self):
+        """Stack cards upward from each monitor's bottom-right corner, newest at the bottom."""
+        bottoms = {}
+        overflow = []
+        for card in reversed(self.previews):
+            if not card.get_visible():
+                continue
+            area = card.monitor.get_workarea()
+            key = (area.x, area.y, area.width, area.height)
+            width, height = card.get_size()
+            bottom = bottoms.get(key, area.y + area.height - 22)
+            top = bottom - height
+            if top < area.y + 22 and bottom != area.y + area.height - 22:
+                overflow.append(card)
+                continue
+            card.move(max(area.x, area.x + area.width - width - 22), max(area.y, top))
+            bottoms[key] = top - STACK_GAP
+        for card in overflow:
+            card.destroy()
+
+    def set_hovered(self, hovered):
+        self.hovered = hovered
+        for card in self.previews:
+            card.arm_timer()
+
+    @staticmethod
+    def save_png(image, path):
+        # Publish only a complete PNG so folder watchers never see a partial file.
+        with tempfile.NamedTemporaryFile(dir=str(path.parent), prefix=".snap-", delete=False) as out:
+            temporary = Path(out.name)
+        try:
+            image.savev(str(temporary), "png", [], [])
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def pictures():
+        pictures = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
+        return Path(pictures or str(Path.home() / "Pictures"))
+
+    def edit(self, image, monitor, timestamp):
+        try:
+            editor = Editor(image, monitor, lambda edited: self.save_edit(edited, monitor),
+                            self.copy_image, timestamp)
+        except Exception as exc:
+            self.report_error(exc)
+            return
+        editor.monitor = monitor
+        self.editors.append(editor)
+        editor.connect("destroy", self.editor_closed)
+        self.set_hovered(False)
+        for card in self.previews:
+            if card.monitor == monitor:
+                card.hide()
+
+    def editor_closed(self, editor):
+        self.editors.remove(editor)
+        self.show_previews()
+        self.set_hovered(False)
+
+    def save_edit(self, image, monitor):
+        try:
+            folder = self.pictures()
+            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            path = folder / "edited_{}.png".format(stamp)
+            counter = 2
+            while path.exists():
+                path = folder / "edited_{}-{}.png".format(stamp, counter)
+                counter += 1
+            self.save_png(image, path)
+            self.copy_image(image)
+            card = Thumbnail(self, path, image, monitor, title="Edited · naming…")
+            self.add_preview(card)
+            print("Saved {} ({}x{})".format(path, image.get_width(), image.get_height()),
+                  flush=True)
+            self.name_with_haiku(card, image, stamp)
+            return True
+        except Exception as exc:
+            self.report_error(exc)
+            return False
+
+    def name_with_haiku(self, card, image, stamp):
+        claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+        work = Path(tempfile.mkdtemp(prefix="snap-corner-name-"))
+        path = card.path
+
+        def done(name):
+            shutil.rmtree(str(work), ignore_errors=True)
+            final = path
+            if name and path.exists() and not card.uri_exported:
+                target = path.with_name("{}_{}.png".format(name, stamp))
+                counter = 2
+                while target.exists():
+                    target = path.with_name("{}_{}-{}.png".format(name, stamp, counter))
+                    counter += 1
+                path.rename(target)
+                final = target
+                print("Renamed {} -> {}".format(path.name, target.name), flush=True)
+            if card in self.previews:
+                card.path = final
+                card.title.set_text(final.name)
+                card.title.set_tooltip_text(str(final))
+
+        def finished(process, result):
+            try:
+                ok, stdout, stderr = process.communicate_utf8_finish(result)
+                lines = [line.strip() for line in (stdout or "").splitlines() if line.strip()]
+                name = re.sub(r"[^a-z0-9]+", "-", lines[-1].lower()).strip("-")[:70] if lines else ""
+                if not process.get_successful() or not name:
+                    print("Snap Corner: naming failed: {}".format((stderr or "").strip()[:300]),
+                          file=sys.stderr, flush=True)
+                    name = ""
+            except GLib.Error as exc:
+                print("Snap Corner: naming failed: {}".format(exc), file=sys.stderr, flush=True)
+                name = ""
+            done(name.strip("-"))
+
+        try:
+            image_fit(image, 1280, 1280).savev(str(work / "image.png"), "png", [], [])
+            launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.STDIN_PIPE |
+                                                  Gio.SubprocessFlags.STDOUT_PIPE |
+                                                  Gio.SubprocessFlags.STDERR_PIPE)
+            launcher.set_cwd(str(work))
+            process = launcher.spawnv([claude, "-p", "--model", "haiku", "--tools", "Read",
+                                       "--allowedTools", "Read", "--strict-mcp-config",
+                                       "--no-session-persistence", "--disable-slash-commands",
+                                       NAMING_PROMPT])
+            cancel = Gio.Cancellable()
+            GLib.timeout_add_seconds(120, lambda: (cancel.cancel(), process.force_exit(), False)[-1])
+            process.communicate_utf8_async(None, cancel, finished)
+        except (GLib.Error, OSError) as exc:
+            print("Snap Corner: naming failed: {}".format(exc), file=sys.stderr, flush=True)
+            done("")
 
     def finish_capture(self, snapshot, rect, root_width, root_height):
         try:
@@ -408,23 +596,15 @@ class SnapCorner(Gtk.Application):
             left, top = round(x * sx), round(y * sy)
             right, bottom = round((x + w) * sx), round((y + h) * sy)
             image = snapshot.new_subpixbuf(left, top, right - left, bottom - top).copy()
-            pictures = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES)
-            folder = Path(pictures or str(Path.home() / "Pictures")) / "Screenshots"
+            folder = self.pictures() / "Screenshots"
             folder.mkdir(mode=0o700, parents=True, exist_ok=True)
             stamp = datetime.datetime.now().strftime("%Y-%m-%d at %H.%M.%S.%f")
             path = folder / ("Screenshot " + stamp + ".png")
-            # Publish only a complete PNG so folder watchers never see a partial file.
-            with tempfile.NamedTemporaryFile(dir=str(folder), prefix=".snap-", delete=False) as out:
-                temporary = Path(out.name)
-            try:
-                image.savev(str(temporary), "png", [], [])
-                temporary.replace(path)
-            finally:
-                temporary.unlink(missing_ok=True)
+            self.save_png(image, path)
             self.copy_image(image)
             display = Gdk.Display.get_default()
             monitor = display.get_monitor_at_point(x + w // 2, y + h // 2)
-            self.preview = Thumbnail(self, path, image, monitor)
+            self.add_preview(Thumbnail(self, path, image, monitor))
             print("Saved {} ({}x{})".format(path, image.get_width(), image.get_height()),
                   flush=True)
         except Exception as exc:

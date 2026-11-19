@@ -14,11 +14,30 @@ Python 3, PyGObject, GTK 3, and Cairo; no pip packages, browser, or root access.
   that accepts image files. It offers both a PNG file URI and PNG image data.
 - Each screenshot is copied to the clipboard for **Ctrl+V**, and saved under
   the Pictures directory's **Screenshots** folder, using unique timestamp names.
-- Preview buttons: **Copy**, **Open**, **Folder**, and **×** to dismiss.
-- Previews dismiss after 30 seconds. Hovering or dragging pauses dismissal;
-  a successful drop dismisses the preview immediately. Cancelled or rejected
-  drops keep it available for another 30 seconds. Saved files are kept.
-- Taking a new screenshot replaces the preview. The previous PNG remains saved.
+- Preview buttons: **Edit**, **Copy**, **Open**, **Folder**, and **×** to dismiss.
+- Previews stack upward from the corner, newest at the bottom. Cards that no
+  longer fit on the monitor are dropped, oldest first. The stack is hidden while
+  a capture or an editor is open, so it never appears in screenshots.
+- Previews dismiss after 30 seconds. Hovering any card or dragging pauses
+  dismissal; a successful drop dismisses that card immediately. Cancelled or
+  rejected drops keep it available for another 30 seconds. Saved files are kept.
+
+## Editor
+
+Click a preview's picture (or **Edit**) to open the editor on that monitor.
+
+- Tools: **Move** (V), **Crop** (C), **Pen** (P), **Marker** (M), **Arrow** (A),
+  **Box** (R), **Text** (T), **Pixelate** (X). Sizes 1 to 4, eight colors.
+- Move drags an annotation; Delete removes it; double-click text to edit it.
+  With an annotation selected, a color or size click restyles it.
+- Crop is non-destructive and undoable. Ctrl+Z / Ctrl+Shift+Z undo and redo.
+- **Save** (Ctrl+S or Enter) writes a PNG to the Pictures folder, copies it to
+  the clipboard, and adds it to the corner stack for dragging. **Copy** (Ctrl+C)
+  copies without saving. Esc or **Cancel** closes, asking first if there are edits.
+- Saved edits start as `edited_<date>_<time>.png`. In the background, `claude -p
+  --model haiku` looks at a downscaled copy and the file is renamed to
+  `<description>_<date>_<time>.png`; the card's title shows the new name. If the
+  CLI is missing or fails, the original name is kept.
 - The preview does not take keyboard focus. Dragging copies the file; it never
   moves or deletes the original. Images keep their original captured resolution.
 
@@ -41,7 +60,8 @@ Remove the launcher, shortcuts, and login entry; keep screenshots and source:
 
 The installer preserves other shortcuts. Original values for its two shortcut
 slots are saved in the user's local share directory and restored on uninstall.
-Screenshots are saved with owner-only file permissions. Nothing is uploaded.
+Screenshots are saved with owner-only file permissions. Only edited images are
+sent anywhere: a downscaled copy goes to Claude Haiku for naming.
 
 The capture backend requires an X11 session; Wayland capture is not implemented.
 
