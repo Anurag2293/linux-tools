@@ -205,6 +205,8 @@ class Editor(Gtk.Window):
         self.present_with_time(GdkX11.x11_get_server_time(self.get_window()))
 
     def bring_to_front(self):
+        if not self.get_window():
+            return False
         xid = self.get_window().get_xid()
         if shutil.which("xdotool"):
             subprocess.Popen(["xdotool", "windowactivate", str(xid)],
