@@ -1,0 +1,10 @@
+[Unit]
+Description=ferry: pull new phone screenshots over adb
+
+[Service]
+ExecStart=%h/Code/ferry/ferry watch
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

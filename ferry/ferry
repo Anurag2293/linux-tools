@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""ferry: grab screenshots from the Pixel over adb (office Wi-Fi or Tailscale)."""
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+PHONE_TS = "100.71.48.103:5555"
+SHOTS_DIR = "/sdcard/Pictures/Screenshots"
+OUT = Path.home() / "Pictures" / "ferry"
+ADB = shutil.which("adb") or str(Path.home() / "Android/Sdk/platform-tools/adb")
+
+
+def adb(*args, serial=None, capture=True, timeout=30):
+    cmd = [ADB] + (["-s", serial] if serial else []) + list(args)
+    return subprocess.run(cmd, capture_output=capture, timeout=timeout)
+
+
+def devices():
+    out = adb("devices").stdout.decode()
+    return [l.split()[0] for l in out.splitlines()[1:] if l.endswith("\tdevice")]
+
+
+def serial():
+    devs = [d for d in devices() if not d.startswith("emulator-")]
+    if not devs:
+        adb("connect", PHONE_TS, timeout=15)
+        devs = [d for d in devices() if not d.startswith("emulator-")]
+    if not devs:
+        sys.exit("ferry: phone not reachable. Check `tailscale status` for pixel-7-pro, then "
+                 "`ferry tcp` over USB or Wi-Fi debugging, or `ferry pair HOST:PORT CODE`.")
+    lan = [d for d in devs if "._adb-tls-connect." in d]
+    return (lan or devs)[0]
+
+
+def copy_image(path):
+    code = (
+        "import sys, gi; gi.require_version('Gtk', '3.0');"
+        "from gi.repository import Gtk, GdkPixbuf, Gdk;"
+        "c = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD);"
+        "c.set_image(GdkPixbuf.Pixbuf.new_from_file(sys.argv[1]));"
+        "Gdk.Display.get_default().flush();"
+        "import time; t0 = time.time();"
+        "c.connect('owner-change', lambda *a: Gtk.main_quit() if time.time() - t0 > 1 else None);"
+        "Gtk.main()"
+    )
+    env = dict(os.environ)
+    env.setdefault("DISPLAY", ":0")
+    env.setdefault("XAUTHORITY", f"/run/user/{os.getuid()}/gdm/Xauthority")
+    subprocess.Popen(["/usr/bin/python3", "-c", code, str(path)], env=env, start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.5)
+
+
+def show(path):
+    snap = shutil.which("snap-corner") or str(Path.home() / ".local/bin/snap-corner")
+    if os.access(snap, os.X_OK):
+        env = dict(os.environ)
+        env.setdefault("DISPLAY", ":0")
+        env.setdefault("XAUTHORITY", f"/run/user/{os.getuid()}/gdm/Xauthority")
+        subprocess.Popen([snap, "--show", str(path)], env=env, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        copy_image(path)
+        subprocess.run(["notify-send", "-i", str(path), "Phone screenshot", str(path)])
+
+
+def shot():
+    s = serial()
+    OUT.mkdir(parents=True, exist_ok=True)
+    path = OUT / time.strftime("phoneshot_%Y%m%d-%H%M%S.png")
+    data = adb("exec-out", "screencap", "-p", serial=s).stdout
+    if not data.startswith(b"\x89PNG"):
+        sys.exit("ferry: screencap failed")
+    path.write_bytes(data)
+    copy_image(path)
+    print(path)
+
+
+def last(n=1):
+    s = serial()
+    names = adb("shell", f"ls -t {SHOTS_DIR}", serial=s).stdout.decode().split()
+    names = [x for x in names if x.lower().endswith((".png", ".jpg"))][:n]
+    if not names:
+        sys.exit("ferry: no screenshots on the phone")
+    OUT.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for name in names:
+        dest = OUT / name
+        if not dest.exists():
+            adb("pull", f"{SHOTS_DIR}/{name}", str(dest), serial=s)
+        paths.append(dest)
+    copy_image(paths[0])
+    for p in paths:
+        print(p)
+
+
+def list_shots(s):
+    out = adb("shell", f"ls -t {SHOTS_DIR}", serial=s, timeout=10)
+    if out.returncode != 0:
+        raise RuntimeError(out.stderr.decode().strip())
+    return [x for x in out.stdout.decode().split() if x.lower().endswith((".png", ".jpg"))]
+
+
+def complete(path):
+    data = path.read_bytes()
+    return data.rstrip(b"\0").endswith(b"IEND\xaeB`\x82") if path.suffix.lower() == ".png" \
+        else data.endswith(b"\xff\xd9")
+
+
+def watch(interval=3):
+    seen = None
+    while True:
+        try:
+            s = serial()
+            names = list_shots(s)
+            if seen is None:
+                seen = set(names)
+                print(f"watching {s}, {len(seen)} existing screenshots skipped", flush=True)
+            new = [n for n in names if n not in seen]
+            for name in reversed(new):
+                dest = OUT / name
+                OUT.mkdir(parents=True, exist_ok=True)
+                adb("pull", f"{SHOTS_DIR}/{name}", str(dest), serial=s)
+                if not dest.exists() or not complete(dest):
+                    dest.unlink(missing_ok=True)
+                    continue
+                seen.add(name)
+                show(dest)
+                print(dest, flush=True)
+        except (SystemExit, RuntimeError, subprocess.TimeoutExpired, OSError) as e:
+            print(f"waiting for phone: {e}", flush=True)
+            time.sleep(interval * 5)
+        time.sleep(interval)
+
+
+def status():
+    devs = devices()
+    print("adb:", ADB)
+    print("devices:", ", ".join(devs) or "none")
+    print("output:", OUT)
+
+
+def usage():
+    print("""ferry shot           screenshot the phone now (prints path, copies image)
+ferry last [N]       pull the newest N phone screenshots (copies the newest)
+ferry status         adb devices, paths and the watcher
+ferry watch          pull every new phone screenshot as it appears (run by ferry-watch.service)
+ferry tcp            re-enable adb over Tailscale (port 5555, resets on phone reboot)
+ferry pair HOST:PORT CODE   pair with Wireless debugging
+ferry adb ...        run adb against the phone""")
+
+
+def main():
+    a = sys.argv[1:]
+    cmd = a[0] if a else "help"
+    if cmd == "shot":
+        shot()
+    elif cmd == "last":
+        last(int(a[1]) if len(a) > 1 else 1)
+    elif cmd == "status":
+        status()
+        r = subprocess.run(["systemctl", "--user", "is-active", "ferry-watch"], capture_output=True)
+        print("watch:", r.stdout.decode().strip())
+    elif cmd == "watch":
+        watch()
+    elif cmd == "tcp":
+        adb("tcpip", "5555", serial=serial(), capture=False)
+        time.sleep(3)
+        adb("connect", PHONE_TS, capture=False)
+    elif cmd == "pair" and len(a) == 3:
+        adb("pair", a[1], a[2], capture=False)
+    elif cmd == "adb":
+        os.execv(ADB, [ADB, "-s", serial()] + a[1:])
+    else:
+        usage()
+
+
+if __name__ == "__main__":
+    main()
