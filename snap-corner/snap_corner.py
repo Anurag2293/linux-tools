@@ -24,20 +24,29 @@ from editor import Editor
 APP_ID = "com.anurag.SnapCorner"
 MODES = ("--area", "--screen", "--background", "--quit")
 STACK_GAP = 10
+CARD_PAD = 8
+CARD_RADIUS = 14
+THUMB_WIDTH = 284
 NAMING_PROMPT = ("Read image.png in the current directory. Reply with only a short descriptive "
                  "file name for it: 3 to 7 lowercase words joined by hyphens that say what the "
                  "picture shows, no extension, nothing else.")
-USAGE = "Usage: snap-corner [--area|--screen|--background|--quit]"
+USAGE = "Usage: snap-corner [--area|--screen|--background|--quit|--show PATH]"
 CSS = b"""
-#snap-card { background: #20232b; color: #f4f4f5; border-radius: 12px;
-             border: 1px solid #555966; padding: 10px; }
-#snap-card label { color: #f4f4f5; }
-#snap-card .hint { color: #bec3cf; font-size: 11px; }
-#snap-card .title { font-size: 12px; }
-#snap-card button { background: #343945; color: #f4f4f5; border: none;
-                    box-shadow: none; text-shadow: none; border-radius: 6px;
-                    padding: 4px 10px; min-height: 22px; }
-#snap-card button:hover { background: #4a5263; }
+#snap-card label { color: #ececef; }
+#snap-card .title { font-size: 12px; font-weight: bold; }
+#snap-card .hint { color: #9a9ca6; font-size: 11px; }
+#snap-card button { background: transparent; color: #d6d7dc; border: none; box-shadow: none;
+                    text-shadow: none; -gtk-icon-shadow: none; border-radius: 8px;
+                    padding: 5px; min-width: 0; min-height: 0; }
+#snap-card button:hover { background: rgba(255, 255, 255, 0.10); color: #ffffff; }
+#snap-card button:active { background: rgba(255, 255, 255, 0.18); }
+#snap-card button.close { background: rgba(20, 21, 26, 0.72); border-radius: 99px; padding: 3px;
+                          color: #ffffff; }
+#snap-card button.close:hover { background: rgba(20, 21, 26, 0.92); }
+#snap-clear { background: rgba(28, 29, 35, 0.94); color: #d6d7dc; border: 1px solid #3a3c46;
+              border-radius: 99px; box-shadow: none; text-shadow: none;
+              padding: 3px 14px; min-height: 20px; font-size: 11px; }
+#snap-clear:hover { background: #2c2e37; color: #ffffff; }
 """
 
 
@@ -46,6 +55,15 @@ def image_fit(image, width, height):
     return image.scale_simple(max(1, round(image.get_width() * factor)),
                               max(1, round(image.get_height() * factor)),
                               GdkPixbuf.InterpType.BILINEAR)
+
+
+def rounded_rect(cr, x, y, width, height, radius):
+    cr.new_sub_path()
+    cr.arc(x + width - radius, y + radius, radius, -math.pi / 2, 0)
+    cr.arc(x + width - radius, y + height - radius, radius, 0, math.pi / 2)
+    cr.arc(x + radius, y + height - radius, radius, math.pi / 2, math.pi)
+    cr.arc(x + radius, y + radius, radius, math.pi, 3 * math.pi / 2)
+    cr.close_path()
 
 
 def close_shell_popups():
@@ -228,26 +246,20 @@ class Thumbnail(Gtk.Window):
         self.connect("draw", self.clear_background)
         frame = Gtk.EventBox()
         frame.set_name("snap-card")
+        frame.set_app_paintable(True)
+        frame.connect("draw", self.draw_card)
         frame.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
         frame.connect("enter-notify-event", self.enter)
         frame.connect("leave-notify-event", self.leave)
         self.add(frame)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(CARD_PAD)
         frame.add(box)
-        header = Gtk.Box(spacing=8)
-        self.title = Gtk.Label(label=title, xalign=0)
-        self.title.set_ellipsize(Pango.EllipsizeMode.END)
-        self.title.set_max_width_chars(28)
-        self.title.get_style_context().add_class("title")
-        header.pack_start(self.title, True, True, 0)
-        close = Gtk.Button(label="×")
-        close.set_tooltip_text("Dismiss preview; the saved screenshot is kept")
-        close.connect("clicked", lambda _: self.destroy())
-        header.pack_end(close, False, False, 0)
-        box.pack_start(header, False, False, 0)
+        self.small_image = image_fit(image, THUMB_WIDTH, 170)
         self.drag_surface = Gtk.EventBox()
-        self.small_image = image_fit(image, 288, 170)
-        self.drag_surface.add(Gtk.Image.new_from_pixbuf(self.small_image))
+        self.drag_surface.set_app_paintable(True)
+        self.drag_surface.set_size_request(THUMB_WIDTH, max(64, self.small_image.get_height()))
+        self.drag_surface.connect("draw", self.draw_picture)
         self.drag_surface.set_tooltip_text("Drag into a chat or another app · Click to edit")
         self.drag_surface.add_events(Gdk.EventMask.BUTTON_PRESS_MASK |
                                      Gdk.EventMask.BUTTON_RELEASE_MASK)
@@ -263,21 +275,78 @@ class Thumbnail(Gtk.Window):
         self.drag_surface.connect("drag-begin", self.drag_begin)
         self.drag_surface.connect("drag-failed", self.drag_failed)
         self.drag_surface.connect("drag-end", self.drag_end)
-        box.pack_start(self.drag_surface, False, False, 0)
-        self.hint = Gtk.Label(label="Drag into an app · Click to edit · Copied")
+        overlay = Gtk.Overlay()
+        overlay.add(self.drag_surface)
+        close = self.icon_button("window-close-symbolic",
+                                 "Dismiss preview; the saved screenshot is kept",
+                                 lambda _: self.destroy())
+        close.get_style_context().add_class("close")
+        close.set_halign(Gtk.Align.END)
+        close.set_valign(Gtk.Align.START)
+        close.set_margin_top(6)
+        close.set_margin_end(6)
+        overlay.add_overlay(close)
+        box.pack_start(overlay, False, False, 0)
+        footer = Gtk.Box(spacing=4)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        text.set_valign(Gtk.Align.CENTER)
+        self.title = Gtk.Label(label=title, xalign=0)
+        self.title.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self.title.set_width_chars(1)
+        self.title.get_style_context().add_class("title")
+        text.pack_start(self.title, False, False, 0)
+        self.hint = Gtk.Label(label="{} × {} · Copied".format(image.get_width(),
+                                                              image.get_height()), xalign=0)
+        self.hint.set_ellipsize(Pango.EllipsizeMode.END)
+        self.hint.set_width_chars(1)
         self.hint.get_style_context().add_class("hint")
-        box.pack_start(self.hint, False, False, 0)
-        actions = Gtk.Box(spacing=6)
-        for title, action in (("Edit", self.edit), ("Copy", self.copy), ("Open", self.open),
-                              ("Folder", self.folder)):
-            button = Gtk.Button(label=title)
-            button.connect("clicked", action)
-            actions.pack_start(button, True, True, 0)
-        box.pack_start(actions, False, False, 0)
+        text.pack_start(self.hint, False, False, 0)
+        footer.pack_start(text, True, True, 2)
+        for icon, tip, action in (("document-edit-symbolic", "Edit", self.edit),
+                                  ("edit-copy-symbolic", "Copy to clipboard", self.copy),
+                                  ("image-x-generic-symbolic", "Open in image viewer", self.open),
+                                  ("folder-symbolic", "Show in folder", self.folder)):
+            footer.pack_start(self.icon_button(icon, tip, action), False, False, 0)
+        box.pack_start(footer, False, False, 0)
         self.connect("size-allocate", lambda *a: app.layout())
         self.connect("destroy", self.cleanup)
         self.show_all()
         self.arm_timer()
+
+    @staticmethod
+    def icon_button(icon, tooltip, action):
+        button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.MENU)
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.set_tooltip_text(tooltip)
+        button.set_valign(Gtk.Align.CENTER)
+        button.connect("clicked", action)
+        return button
+
+    def draw_card(self, widget, cr):
+        width, height = widget.get_allocated_width(), widget.get_allocated_height()
+        rounded_rect(cr, 0.5, 0.5, width - 1, height - 1, CARD_RADIUS)
+        cr.set_source_rgba(0.110, 0.114, 0.137, 0.97)
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.10)
+        cr.set_line_width(1)
+        cr.stroke()
+        return False
+
+    def draw_picture(self, widget, cr):
+        width, height = widget.get_allocated_width(), widget.get_allocated_height()
+        rounded_rect(cr, 0, 0, width, height, CARD_RADIUS - CARD_PAD / 2)
+        cr.clip()
+        cr.set_source_rgb(0.07, 0.075, 0.09)
+        cr.paint()
+        image = self.small_image
+        Gdk.cairo_set_source_pixbuf(cr, image, (width - image.get_width()) // 2,
+                                    (height - image.get_height()) // 2)
+        cr.paint()
+        rounded_rect(cr, 0.5, 0.5, width - 1, height - 1, CARD_RADIUS - CARD_PAD / 2)
+        cr.set_source_rgba(1, 1, 1, 0.08)
+        cr.set_line_width(1)
+        cr.stroke()
+        return False
 
     def clear_background(self, widget, cr):
         cr.set_operator(cairo.OPERATOR_SOURCE)
@@ -325,7 +394,7 @@ class Thumbnail(Gtk.Window):
 
     def copy(self, *args):
         self.app.copy_image(self.image)
-        self.hint.set_text("Copied · Paste with Ctrl+V")
+        self.hint.set_text("Copied · paste with Ctrl+V")
         self.arm_timer()
 
     def open(self, *args):
@@ -369,11 +438,47 @@ class Thumbnail(Gtk.Window):
             self.app.layout()
 
 
+class ClearAll(Gtk.Window):
+    def __init__(self, app, key):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.app, self.key = app, key
+        self.set_title("Snap Corner — clear all")
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_accept_focus(False)
+        self.set_focus_on_map(False)
+        self.set_keep_above(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
+        self.stick()
+        app.add_window(self)
+        visual = self.get_screen().get_rgba_visual()
+        if visual:
+            self.set_visual(visual)
+        self.set_app_paintable(True)
+        self.connect("draw", lambda widget, cr: Thumbnail.clear_background(self, widget, cr))
+        button = Gtk.Button(label="Clear all")
+        button.set_name("snap-clear")
+        button.set_tooltip_text("Dismiss every preview on this screen; saved screenshots are kept")
+        button.connect("clicked", self.clear)
+        button.connect("enter-notify-event", lambda *a: app.set_hovered(True))
+        button.connect("leave-notify-event", lambda *a: app.set_hovered(False))
+        self.add(button)
+        self.show_all()
+
+    def clear(self, *args):
+        for card in [c for c in self.app.previews if self.app.stack_key(c) == self.key]:
+            card.destroy()
+        self.app.set_hovered(False)
+
+
 class SnapCorner(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.selector = None
         self.previews = []
+        self.clear_buttons = {}
         self.editors = []
         self.hovered = False
         self.pending = 0
@@ -381,6 +486,7 @@ class SnapCorner(Gtk.Application):
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
+        Gtk.Window.set_default_icon_from_file(str(Path(__file__).resolve().parent / "icon.svg"))
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider,
@@ -389,6 +495,12 @@ class SnapCorner(Gtk.Application):
     def do_command_line(self, command):
         args = command.get_arguments()[1:]
         mode = args[0] if args else "--area"
+        if mode == "--show" and len(args) == 2:
+            if not self.held:
+                self.hold()
+                self.held = True
+            self.show_file(Path(command.get_cwd() or ".", args[1]))
+            return 0
         if len(args) > 1 or mode not in MODES:
             print(USAGE, file=sys.stderr, flush=True)
             return 2
@@ -406,6 +518,7 @@ class SnapCorner(Gtk.Application):
             for card in self.previews:
                 card.hide()
             self.set_hovered(False)
+            self.layout()
             if self.pending:
                 GLib.source_remove(self.pending)
             # Let the shortcut modifiers and compositor settle before grabbing input.
@@ -436,6 +549,20 @@ class SnapCorner(Gtk.Application):
             self.report_error(exc)
         return False
 
+    def show_file(self, path):
+        try:
+            image = GdkPixbuf.Pixbuf.new_from_file(str(path))
+            self.copy_image(image)
+            display = Gdk.Display.get_default()
+            _, x, y = display.get_default_seat().get_pointer().get_position()
+            monitor = display.get_monitor_at_point(x, y)
+            card = Thumbnail(self, path, image, monitor, title="Phone screenshot")
+            if self.selector:
+                card.hide()
+            self.add_preview(card)
+        except Exception as exc:
+            self.report_error(exc)
+
     def editing_on(self, monitor):
         return any(editor.monitor == monitor for editor in self.editors)
 
@@ -455,23 +582,43 @@ class SnapCorner(Gtk.Application):
 
     def layout(self):
         """Stack cards upward from each monitor's bottom-right corner, newest at the bottom."""
+        visible = [card for card in self.previews if card.get_visible()]
+        counts = {}
+        for card in visible:
+            counts[self.stack_key(card)] = counts.get(self.stack_key(card), 0) + 1
+        for key in list(self.clear_buttons):
+            if counts.get(key, 0) < 2:
+                self.clear_buttons.pop(key).destroy()
         bottoms = {}
+        for key, count in counts.items():
+            x, y, width, height = key
+            bottoms[key] = y + height - 22
+            if count >= 2:
+                button = self.clear_buttons.get(key) or self.clear_buttons.setdefault(
+                    key, ClearAll(self, key))
+                bw, bh = button.get_size()
+                button.move(x + width - bw - 22, y + height - 22 - bh)
+                bottoms[key] -= bh + STACK_GAP
+        floors = dict(bottoms)
         overflow = []
-        for card in reversed(self.previews):
-            if not card.get_visible():
-                continue
+        for card in reversed(visible):
             area = card.monitor.get_workarea()
-            key = (area.x, area.y, area.width, area.height)
+            key = self.stack_key(card)
             width, height = card.get_size()
-            bottom = bottoms.get(key, area.y + area.height - 22)
+            bottom = bottoms[key]
             top = bottom - height
-            if top < area.y + 22 and bottom != area.y + area.height - 22:
+            if top < area.y + 22 and bottom != floors[key]:
                 overflow.append(card)
                 continue
             card.move(max(area.x, area.x + area.width - width - 22), max(area.y, top))
             bottoms[key] = top - STACK_GAP
         for card in overflow:
             card.destroy()
+
+    @staticmethod
+    def stack_key(card):
+        area = card.monitor.get_workarea()
+        return area.x, area.y, area.width, area.height
 
     def set_hovered(self, hovered):
         self.hovered = hovered
@@ -508,6 +655,7 @@ class SnapCorner(Gtk.Application):
         for card in self.previews:
             if card.monitor == monitor:
                 card.hide()
+        self.layout()
 
     def editor_closed(self, editor):
         self.editors.remove(editor)
@@ -631,9 +779,11 @@ class SnapCorner(Gtk.Application):
 
 if __name__ == "__main__":
     os.umask(0o077)
+    GLib.set_prgname(APP_ID)
     # Validate locally, before forwarding to a resident instance. PyGObject does
     # not expose Gio's variadic print method for replying to a remote command.
-    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in MODES):
+    show = len(sys.argv) == 3 and sys.argv[1] == "--show"
+    if not show and (len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in MODES)):
         print(USAGE)
         raise SystemExit(2)
     raise SystemExit(SnapCorner().run(sys.argv))

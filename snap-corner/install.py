@@ -16,6 +16,7 @@ BACKUP = HOME / ".local/share/snap-corner/install-backup.json"
 SCHEMA = "org.gnome.settings-daemon.plugins.media-keys"
 CUSTOM = SCHEMA + ".custom-keybinding"
 PREFIX = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/"
+APP_ID = "com.anurag.SnapCorner"
 EXTENSION_UUID = "snap-corner@anurag"
 EXTENSION = HOME / ".local/share/gnome-shell/extensions" / EXTENSION_UUID
 BINDINGS = [(PREFIX + "snap-corner-area/", "Snap Corner: capture area", "<Control><Alt>s", "--area"),
@@ -46,8 +47,9 @@ def install():
           shlex.quote(str(SOURCE / "snap_corner.py")) + ' "$@"\n', 0o755)
     entry = ("[Desktop Entry]\nType=Application\nName=Snap Corner\n"
              "Comment=Capture an area and drag the screenshot into another app\n"
-             "Exec=" + str(LAUNCHER) + " --area\nIcon=applets-screenshooter\n"
-             "Terminal=false\nCategories=Utility;Graphics;\nStartupNotify=false\n")
+             "Exec=" + str(LAUNCHER) + " --area\nIcon=" + str(SOURCE / "icon.svg") + "\n"
+             "Terminal=false\nCategories=Utility;Graphics;\nStartupNotify=false\n"
+             "StartupWMClass=" + APP_ID + "\n")
     write(DESKTOP, entry)
     write(AUTOSTART, entry.replace(" --area\n", " --background\n") +
           "X-GNOME-Autostart-enabled=true\nNoDisplay=true\n")

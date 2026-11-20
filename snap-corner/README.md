@@ -14,8 +14,10 @@ Python 3, PyGObject, GTK 3, and Cairo; no pip packages, browser, or root access.
   that accepts image files. It offers both a PNG file URI and PNG image data.
 - Each screenshot is copied to the clipboard for **Ctrl+V**, and saved under
   the Pictures directory's **Screenshots** folder, using unique timestamp names.
-- Preview buttons: **Edit**, **Copy**, **Open**, **Folder**, and **×** to dismiss.
-- Previews stack upward from the corner, newest at the bottom. Cards that no
+- Each card shows the picture, its name and size, and icon buttons for **Edit**, **Copy**,
+  **Open**, and **Folder** (hover for tooltips). The **×** on the picture dismisses it.
+- Previews stack upward from the corner, newest at the bottom. With two or more cards on a
+  screen, a **Clear all** button below the stack dismisses that screen's cards. Cards that no
   longer fit on the monitor are dropped, oldest first. The stack is hidden while
   a capture or an editor is open, so it never appears in screenshots.
 - Previews dismiss after 30 seconds. Hovering any card or dragging pauses
@@ -50,7 +52,9 @@ Install (or reinstall) for the current user:
 Launch from the application menu as **Snap Corner**, or use the shortcuts.
 It starts silently at login, uses one shared process, and remains available to
 serve the image clipboard after the thumbnail closes. Running `snap-corner`
-defaults to area capture. Options: `--area`, `--screen`, `--background`, `--quit`.
+defaults to area capture. Options: `--area`, `--screen`, `--background`, `--quit`,
+and `--show PATH`, which opens a card for an existing image in the stack at the bottom
+right of the monitor under the pointer and copies it (used by `ferry watch`).
 
 Remove the launcher, shortcuts, and login entry; keep screenshots and source:
 

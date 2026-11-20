@@ -2,14 +2,17 @@
 
 import copy
 import math
+import shutil
+import subprocess
 
 import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
+gi.require_version("GdkX11", "3.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo
+from gi.repository import Gdk, GdkPixbuf, GdkX11, GLib, Gtk, Pango, PangoCairo
 
 
 TOOLS = [("select", "Move", "v", "Select, move, or delete annotations; double-click text to edit"),
@@ -31,19 +34,28 @@ HINTS = {"select": "Drag an annotation to move it · Delete removes it · Double
          "crop": "Drag the area to keep · Ctrl+Z restores",
          "text": "Click to place text · Enter adds a line · Esc finishes"}
 CSS = b"""
-#snap-editor { background: #15171c; }
-#snap-editor .toolbar-box { background: #20232b; border-bottom: 1px solid #383c48; padding: 6px 10px; }
-#snap-editor .status { background: #20232b; color: #aab0bd; padding: 4px 12px; font-size: 11px; }
-#snap-editor button { background: #2c303a; color: #f4f4f5; border: 1px solid transparent;
-                      box-shadow: none; text-shadow: none; border-radius: 6px;
-                      padding: 3px 9px; min-height: 24px; -gtk-icon-shadow: none; }
-#snap-editor button:hover { background: #3c4250; }
-#snap-editor button:checked { background: #4b5366; border-color: #f2a33a; }
-#snap-editor button.swatch, #snap-editor button.size { padding: 2px; min-width: 22px; }
-#snap-editor button.primary { background: #e8590c; }
+#snap-editor { background: #111216; }
+#snap-editor .topbar { background: #1b1c22; border-bottom: 1px solid #2a2b33; padding: 6px 10px; }
+#snap-editor .rail { background: #1b1c22; border-right: 1px solid #2a2b33; padding: 8px 6px; }
+#snap-editor .status { color: #8d8f99; padding: 6px 14px; font-size: 11px; }
+#snap-editor button { background: transparent; color: #c9cad1; border: none; box-shadow: none;
+                      text-shadow: none; -gtk-icon-shadow: none; border-radius: 8px;
+                      padding: 4px 8px; min-height: 26px; min-width: 0; }
+#snap-editor button:hover { background: rgba(255, 255, 255, 0.08); color: #ffffff; }
+#snap-editor button:checked { background: rgba(255, 255, 255, 0.14); color: #ffffff; }
+#snap-editor button:disabled { color: #4f515b; }
+#snap-editor button.tool { padding: 6px 2px 5px 2px; min-width: 56px; }
+#snap-editor button.tool label { font-size: 10px; color: #a9abb4; }
+#snap-editor button.tool:hover label { color: #ffffff; }
+#snap-editor button.tool:checked { background: #e8590c; }
+#snap-editor button.tool:checked label { color: #ffffff; }
+#snap-editor button.swatch { padding: 2px; border-radius: 99px; min-height: 0; }
+#snap-editor button.swatch:checked { background: transparent; }
+#snap-editor button.size { padding: 2px; min-width: 26px; }
+#snap-editor button.primary { background: #e8590c; color: #ffffff; font-weight: bold;
+                              padding: 4px 16px; }
 #snap-editor button.primary:hover { background: #f06d22; }
-#snap-editor button:disabled { color: #6b7180; }
-#snap-editor separator { background: #383c48; min-width: 1px; margin: 2px 6px; }
+#snap-editor separator { background: #2f3039; min-width: 1px; min-height: 1px; margin: 6px 8px; }
 """
 
 
@@ -84,21 +96,34 @@ class Editor(Gtk.Window):
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.add(root)
-        bar = Gtk.Box(spacing=4)
-        bar.get_style_context().add_class("toolbar-box")
+        bar = Gtk.Box(spacing=2)
+        bar.get_style_context().add_class("topbar")
         root.pack_start(bar, False, False, 0)
+        body = Gtk.Box()
+        root.pack_start(body, True, True, 0)
+        rail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        rail.get_style_context().add_class("rail")
+        body.pack_start(rail, False, False, 0)
         self.tool_buttons = {}
         group = None
         for name, label, key, tip in TOOLS:
-            button = Gtk.RadioButton.new_with_label_from_widget(group, label)
+            button = Gtk.RadioButton.new_from_widget(group)
             group = group or button
             button.set_mode(False)
             button.set_can_focus(False)
             button.set_tooltip_text("{} ({})".format(tip, key.upper()))
+            button.get_style_context().add_class("tool")
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            icon = Gtk.DrawingArea()
+            icon.set_size_request(20, 20)
+            icon.set_halign(Gtk.Align.CENTER)
+            icon.connect("draw", self.draw_tool_icon, name)
+            content.pack_start(icon, False, False, 0)
+            content.pack_start(Gtk.Label(label=label), False, False, 0)
+            button.add(content)
             button.connect("toggled", self.tool_toggled, name)
             self.tool_buttons[name] = button
-            bar.pack_start(button, False, False, 0)
-        bar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 0)
+            rail.pack_start(button, False, False, 0)
         group = None
         self.swatches = []
         for name, color in COLORS:
@@ -109,10 +134,11 @@ class Editor(Gtk.Window):
             button.set_tooltip_text(name)
             button.get_style_context().add_class("swatch")
             dot = Gtk.DrawingArea()
-            dot.set_size_request(18, 18)
-            dot.connect("draw", self.draw_swatch, color)
+            dot.set_size_request(22, 22)
+            dot.connect("draw", self.draw_swatch, color, button)
             button.add(dot)
             button.connect("toggled", self.color_toggled, color)
+            button.connect("toggled", lambda b: self.queue_draw())
             self.swatches.append(button)
             bar.pack_start(button, False, False, 0)
         bar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 0)
@@ -133,9 +159,6 @@ class Editor(Gtk.Window):
             self.size_buttons.append(button)
             bar.pack_start(button, False, False, 0)
         self.size_buttons[self.level].set_active(True)
-        bar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 0)
-        self.undo_button = self.action_button(bar, "Undo", "Undo (Ctrl+Z)", self.undo)
-        self.redo_button = self.action_button(bar, "Redo", "Redo (Ctrl+Shift+Z)", self.redo)
         save = Gtk.Button(label="Save")
         save.set_can_focus(False)
         save.set_tooltip_text("Save to Pictures and add it to the corner stack (Ctrl+S)")
@@ -144,7 +167,14 @@ class Editor(Gtk.Window):
         bar.pack_end(save, False, False, 0)
         self.action_button(bar, "Copy", "Copy the edited image (Ctrl+C)", self.copy, end=True)
         self.action_button(bar, "Cancel", "Close without saving (Esc)", self.cancel, end=True)
+        bar.pack_end(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 0)
+        self.redo_button = self.action_button(bar, None, "Redo (Ctrl+Shift+Z)", self.redo,
+                                              end=True, icon="edit-redo-symbolic")
+        self.undo_button = self.action_button(bar, None, "Undo (Ctrl+Z)", self.undo,
+                                              end=True, icon="edit-undo-symbolic")
 
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        body.pack_start(content, True, True, 0)
         self.canvas = Gtk.DrawingArea()
         self.canvas.set_can_focus(True)
         self.canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK |
@@ -154,10 +184,10 @@ class Editor(Gtk.Window):
         self.canvas.connect("motion-notify-event", self.motion)
         self.canvas.connect("button-release-event", self.release)
         self.canvas.connect("realize", lambda w: self.update_cursor())
-        root.pack_start(self.canvas, True, True, 0)
+        content.pack_start(self.canvas, True, True, 0)
         self.status = Gtk.Label(xalign=0)
         self.status.get_style_context().add_class("status")
-        root.pack_start(self.status, False, False, 0)
+        content.pack_start(self.status, False, False, 0)
         self.connect("key-press-event", self.key)
         self.connect("delete-event", lambda *a: not self.confirm_discard())
         self.connect("focus-out-event", lambda *a: self.im.focus_out())
@@ -170,11 +200,26 @@ class Editor(Gtk.Window):
         self.move(area.x + (area.width - width) // 2, area.y + (area.height - height) // 2)
         self.tool_buttons[self.tool].set_active(True)
         self.refresh()
+        self.connect("map-event", lambda *a: GLib.timeout_add(60, self.bring_to_front) and False)
         self.show_all()
-        self.present_with_time(timestamp)
+        self.present_with_time(GdkX11.x11_get_server_time(self.get_window()))
 
-    def action_button(self, bar, label, tip, callback, end=False):
-        button = Gtk.Button(label=label)
+    def bring_to_front(self):
+        xid = self.get_window().get_xid()
+        if shutil.which("xdotool"):
+            subprocess.Popen(["xdotool", "windowactivate", str(xid)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            self.set_keep_above(True)
+            self.present_with_time(GdkX11.x11_get_server_time(self.get_window()))
+            GLib.timeout_add(800, lambda: self.set_keep_above(False))
+        return False
+
+    def action_button(self, bar, label, tip, callback, end=False, icon=None):
+        if icon:
+            button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.MENU)
+        else:
+            button = Gtk.Button(label=label)
         button.set_can_focus(False)
         button.set_tooltip_text(tip)
         button.connect("clicked", lambda _: callback())
@@ -182,19 +227,63 @@ class Editor(Gtk.Window):
         return button
 
     @staticmethod
-    def draw_swatch(widget, cr, color):
-        cr.arc(9, 9, 8, 0, 2 * math.pi)
+    def draw_swatch(widget, cr, color, button):
+        if button.get_active():
+            cr.arc(11, 11, 10, 0, 2 * math.pi)
+            cr.set_source_rgb(1, 1, 1)
+            cr.set_line_width(1.6)
+            cr.stroke()
+        cr.arc(11, 11, 7, 0, 2 * math.pi)
         cr.set_source_rgb(*color)
         cr.fill_preserve()
-        cr.set_source_rgba(1, 1, 1, 0.35)
+        cr.set_source_rgba(1, 1, 1, 0.25)
         cr.set_line_width(1)
         cr.stroke()
 
     @staticmethod
     def draw_size(widget, cr, width):
         cr.arc(9, 9, max(1.5, width / 2 * 0.75 + 1), 0, 2 * math.pi)
-        cr.set_source_rgb(0.95, 0.95, 0.96)
+        cr.set_source_rgb(0.9, 0.9, 0.92)
         cr.fill()
+
+    @staticmethod
+    def draw_tool_icon(widget, cr, name):
+        color = widget.get_style_context().get_color(widget.get_state_flags())
+        cr.set_source_rgba(color.red, color.green, color.blue, color.alpha)
+        cr.scale(20 / 24, 20 / 24)
+        cr.set_line_width(1.8)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        def poly(*points, close=False):
+            cr.move_to(*points[0])
+            for point in points[1:]:
+                cr.line_to(*point)
+            if close:
+                cr.close_path()
+        if name == "select":
+            poly((6, 3), (19, 11), (13, 12.5), (10, 19), close=True)
+        elif name == "crop":
+            poly((7, 2), (7, 17), (22, 17))
+            poly((2, 7), (17, 7), (17, 22))
+        elif name == "pen":
+            poly((4, 20), (8, 19), (19, 8), (16, 5), (5, 16), close=True)
+        elif name == "marker":
+            poly((9, 14), (16, 4), (20, 7), (13, 17), close=True)
+            poly((9, 14), (6, 20), (14, 20), (13, 17))
+        elif name == "arrow":
+            poly((5, 19), (19, 5))
+            poly((10, 5), (19, 5), (19, 14))
+        elif name == "rect":
+            cr.rectangle(4, 5, 16, 14)
+        elif name == "text":
+            poly((5, 7), (5, 4), (19, 4), (19, 7))
+            poly((12, 4), (12, 20))
+            poly((9, 20), (15, 20))
+        elif name == "pixelate":
+            for x, y in ((4, 4), (14, 4), (4, 14), (14, 14)):
+                cr.rectangle(x, y, 6, 6)
+        cr.stroke()
+        return False
 
     # ----- state and history -----
 
