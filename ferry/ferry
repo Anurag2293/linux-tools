@@ -89,8 +89,11 @@ def last(n=1):
     paths = []
     for name in names:
         dest = OUT / name
-        if not dest.exists():
+        if not (dest.exists() and complete(dest)):
             adb("pull", f"{SHOTS_DIR}/{name}", str(dest), serial=s)
+            if not (dest.exists() and complete(dest)):
+                dest.unlink(missing_ok=True)
+                sys.exit(f"ferry: pulling {name} failed")
         paths.append(dest)
     copy_image(paths[0])
     for p in paths:
