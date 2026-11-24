@@ -62,7 +62,7 @@ If the patch no longer applies to a new nightly, or the build or its checks fail
 and leaves stock in place. It then opens a T3 thread in the `~/Code` project ("Fix T3 fork build
 on <tag>", `t3 thread start`) that rebases or fixes `fork/desktop` and runs
 `t3-fork run --force`, and notifies. The thread commits its fixes: patch changes on
-`fork/desktop` (never pushed), and changes to `t3code-fork/` in `~/Code`, pushed to `origin`.
+`fork/desktop` (never pushed), and changes to `t3code-fork/`, reviewed with sol-loop, then pushed to `main`.
 It opens one thread per nightly tag and records it in `~/.t3/fork/fix-thread.<tag>`; later timer runs that fail on the same tag only log. Delete that
 file to have the next failing run open a new thread. `T3_FORK_FIX_PROJECT`,
 `T3_FORK_FIX_PROVIDER` and `T3_FORK_FIX_MODEL` choose where it runs and on which model.
