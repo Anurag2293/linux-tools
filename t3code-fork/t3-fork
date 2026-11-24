@@ -15,6 +15,10 @@ APPIMAGE=${T3_FORK_APPIMAGE:-$HOME/Applications/T3-Code-Nightly.AppImage}
 STATE=${T3_FORK_STATE:-$HOME/.t3/fork}
 NODE_BIN=${T3_FORK_NODE:-$HOME/.nvm/versions/node/v26.12.1/bin}
 JOBS=${T3_FORK_JOBS:-4}
+T3_CLI=${T3_FORK_T3_CLI:-$HOME/.local/bin/t3}
+FIX_PROJECT=${T3_FORK_FIX_PROJECT:-$HOME/Code}
+FIX_PROVIDER=${T3_FORK_FIX_PROVIDER:-claudeAgent}
+FIX_MODEL=${T3_FORK_FIX_MODEL:-claude-opus-5-5}
 
 mkdir -p "$STATE/logs"
 LOG=${T3_FORK_LOG:-$STATE/logs/$(date +%Y%m%d-%H%M%S).log}
@@ -28,6 +32,48 @@ die() {
   notify "T3 fork build failed" "$*"
   echo "failed: $*" >"$STATE/last-result"
   exit 1
+}
+
+# Like die, but first hands the failure to a new T3 agent thread, once per nightly tag.
+die_and_fix() {
+  local reason=$1 marker=$STATE/fix-thread.$tag id
+  log "FAILED: $reason"
+  echo "failed: $reason" >"$STATE/last-result"
+  if [[ -s $marker ]]; then
+    log "fix thread $(cat "$marker") already handles $tag"
+    exit 1
+  fi
+  if id=$(fix_prompt "$reason" | "$T3_CLI" thread start --title "Fix T3 fork build on $tag" \
+    --provider "$FIX_PROVIDER" --model "$FIX_MODEL" "$FIX_PROJECT" - 2>>"$LOG" | tail -1) && [[ -n $id ]]; then
+    echo "$id" >"$marker"
+    log "opened fix thread $id"
+    notify "T3 fork build failed" "$reason Opened a fix thread: Fix T3 fork build on $tag."
+  else
+    log "could not open a fix thread"
+    notify "T3 fork build failed" "$reason Could not open a fix thread; see $LOG."
+  fi
+  exit 1
+}
+
+fix_prompt() {
+  cat <<EOF
+The T3 Code fork rebuild failed and stock is running. Fix the patch branch and get the patched build installed. This thread was opened by \`t3-fork\` on $(LC_TIME=C date '+%Y-%m-%d %-I:%M %p JST').
+
+Failure: $1
+Installed stock version: $version. Branch \`$BRANCH\` in \`$REPO\` sits on $base.
+Run log: $LOG
+
+Read \`$HOME/Code/t3code-fork/README.md\` and \`$HOME/Code/t3code-fork/t3-fork\` first. Patches are the commits on local branch \`$BRANCH\` (\`git log $base..$BRANCH\`), which is not pushed and must never be pushed.
+
+Steps:
+1. Find the cause in the run log. For a rebase conflict, rebase \`$BRANCH\` onto \`$tag\` and resolve it, keeping each patch's intent; check what upstream changed in the conflicting files between $base and $tag first, and drop a patch part upstream now covers. Work in a temporary worktree under \`$REPO/.worktrees/\`, never in \`.worktrees/fork-build\` while a build runs, and delete your worktree when done. For a build failure, find whether a patch or the build environment caused it and fix that.
+2. Typecheck can't run here (glibc 2.31). Lint changed files inside \`.worktrees/fork-build\`, which has node_modules, then reset that tree with \`git checkout -- .\` and remove any new files you put there. Hold the run lock for that whole step so a timer run can't reset the tree under you: wrap it in \`flock $STATE/lock bash -c '...'\`. Don't hold it while \`t3-fork run\` runs.
+3. Move \`$BRANCH\` to the fixed tip, then run \`t3-fork run --force\` as a \`systemd-run --user --unit=<name> --collect\` unit and follow its log. It builds, swaps the AppImage and restarts only the desktop app after a 10 s notification; the T3 server and agent threads keep running. The t3-fork timer fires every 10 minutes and holds a lock while it runs; check that no run is in progress before starting yours.
+4. Confirm with \`t3-fork status\` that the installed build is the fork on $version, and read \`$STATE/last-result\`.
+5. Commit every change you make. A code fix goes on \`$BRANCH\` as its own commit or squashed into the patch it belongs to; never push \`$BRANCH\` (\`$REPO\`'s only remote is upstream). A change under \`$HOME/Code/t3code-fork/\` is committed in the \`$HOME/Code\` repo with a \`t3code-fork: ...\` message and pushed to its \`origin main\`; commit only your own files there.
+
+Rules: never touch \`~/.t3/userdata\` and never \`pkill -f\` (kill by PID). Report the cause, the fix, the new \`$BRANCH\` tip SHA and the final status, with times in AM/PM JST.
+EOF
 }
 
 # Electron's headers need C++20; Ubuntu 20.04's default g++ 9 lacks it.
@@ -44,7 +90,7 @@ step() {
   local name=$1
   shift
   log "-- $name"
-  ("$@") >>"$LOG" 2>&1 || die "$name (log: $LOG)"
+  ("$@") >>"$LOG" 2>&1 || die_and_fix "$name failed. Stock app left in place."
 }
 
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
@@ -127,7 +173,7 @@ cmd_run() {
     local conflicts
     conflicts=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
     git rebase --abort || true
-    die "patch conflicts with $tag in: ${conflicts:-unknown files}. Stock app left in place."
+    die_and_fix "patch conflicts with $tag in: ${conflicts:-unknown files}. Stock app left in place."
   fi
   local new_tip
   new_tip=$(git rev-parse HEAD)
@@ -144,22 +190,22 @@ cmd_run() {
     node scripts/build-desktop-artifact.ts --platform linux --target AppImage --arch x64 \
     --build-version "$version" --skip-build
   local built
-  built=$(ls "$BUILD"/release/*.AppImage 2>/dev/null | head -1)
-  [[ -n $built ]] || die "no AppImage produced"
+  built=$(ls "$BUILD"/release/*.AppImage 2>/dev/null | head -1) || true
+  [[ -n $built ]] || die_and_fix "no AppImage produced"
   git reset -q --hard
 
   log "-- verify"
-  [[ $(appimage_version "$built") == "$version" ]] || die "built AppImage does not report $version"
+  [[ $(appimage_version "$built") == "$version" ]] || die_and_fix "built AppImage does not report $version"
   local tmp
   tmp=$(mktemp -d)
-  (cd "$tmp" && "$built" --appimage-extract >/dev/null) || die "cannot extract built AppImage"
+  (cd "$tmp" && "$built" --appimage-extract >/dev/null) || die_and_fix "cannot extract built AppImage"
   local app=$tmp/squashfs-root
-  [[ -f $app/resources/app-update.yml ]] || die "built AppImage has no update feed"
+  [[ -f $app/resources/app-update.yml ]] || die_and_fix "built AppImage has no update feed"
   grep -rqs --include='*.js' 'BookMarked' "$app/resources/app.asar.unpacked" "$app/resources" ||
-    grep -aqs 'book-marked' "$app/resources/app.asar" || die "patch not found in the built bundle"
+    grep -aqs 'book-marked' "$app/resources/app.asar" || die_and_fix "patch not found in the built bundle"
   ELECTRON_RUN_AS_NODE=1 "$app/t3code" -e \
     "require('$app/resources/app.asar.unpacked/node_modules/node-pty')" >>"$LOG" 2>&1 ||
-    die "node-pty in the built AppImage does not load on this machine"
+    die_and_fix "node-pty in the built AppImage does not load on this machine"
   rm -rf "$tmp"
 
   [[ $(sha_of "$APPIMAGE") == "$seen_sha" ]] ||
@@ -232,6 +278,10 @@ cmd_status() {
   echo "installed: $(appimage_version "$APPIMAGE") ($kind)"
   echo "branch:    $BRANCH on $(git -C "$REPO" describe --tags --abbrev=0 --match 'v*-nightly.*' "$BRANCH" 2>/dev/null)"
   echo "last:      $(cat "$STATE/last-result" 2>/dev/null || echo none)"
+  local marker
+  marker=$(ls -t "$STATE"/fix-thread.* 2>/dev/null | head -1) || true
+  [[ -n $marker ]] && echo "fix:       ${marker##*/fix-thread.} -> $(cat "$marker")"
+  return 0
 }
 
 case ${1:-} in

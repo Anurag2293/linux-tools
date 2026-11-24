@@ -1,0 +1,25 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "scripts": [
+    {
+      "name": "T3 fork: status",
+      "command": "~/.local/bin/t3-fork status",
+      "icon": "debug"
+    },
+    {
+      "name": "T3 fork: rebuild now",
+      "command": "u=t3-fork-manual-$(date +%s); systemd-run --user --unit=$u --collect ~/.local/bin/t3-fork run --force && journalctl --user -u $u -f -o cat",
+      "icon": "build"
+    },
+    {
+      "name": "T3 fork: roll back to stock",
+      "command": "~/.local/bin/t3-fork rollback",
+      "icon": "configure"
+    },
+    {
+      "name": "T3 fork: restart desktop app",
+      "command": "~/.local/bin/t3-fork restart",
+      "icon": "play"
+    }
+  ]
+}

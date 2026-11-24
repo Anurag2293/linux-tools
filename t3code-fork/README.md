@@ -58,8 +58,19 @@ systemctl --user enable --now t3-fork.timer
    script quits and relaunches the desktop app. Only the desktop client restarts; the T3 server
    and its agent threads keep running. `t3-fork restart` does the same by hand.
 
-If the patch no longer applies to a new nightly, the run stops, notifies, and leaves stock in
-place. Fix the patch on `fork/desktop` (rebase it onto the new tag), then `t3-fork run --force`.
+If the patch no longer applies to a new nightly, or the build or its checks fail, the run stops
+and leaves stock in place. It then opens a T3 thread in the `~/Code` project ("Fix T3 fork build
+on <tag>", `t3 thread start`) that rebases or fixes `fork/desktop` and runs
+`t3-fork run --force`, and notifies. The thread commits its fixes: patch changes on
+`fork/desktop` (never pushed), and changes to `t3code-fork/` in `~/Code`, pushed to `origin`.
+It opens one thread per nightly tag and records it in `~/.t3/fork/fix-thread.<tag>`; later timer runs that fail on the same tag only log. Delete that
+file to have the next failing run open a new thread. `T3_FORK_FIX_PROJECT`,
+`T3_FORK_FIX_PROVIDER` and `T3_FORK_FIX_MODEL` choose where it runs and on which model.
+
+To fix it by hand instead: rebase `fork/desktop` onto the new tag, then `t3-fork run --force`.
+
+The `~/Code` project's `t3.json` offers scripts for status, rebuild, rollback and restart. Import
+them once from "From t3.json" in the T3 scripts menu.
 
 ## Adding a patch
 
