@@ -80,7 +80,7 @@ commit with `--no-verify`. Run `t3-fork run --force` to build it now.
 
 ## Build prerequisites
 
-Node 26.12.1 under `~/.nvm`, `corepack` on PATH, `cargo`, `g++-10` (Electron's headers need
+Node 26.12.1 under `~/.nvm`, `corepack` on PATH (the run puts a corepack `pnpm` shim in `~/.t3/fork/bin`, since Vite+ needs `pnpm` on PATH), `cargo`, `g++-10` (Electron's headers need
 C++20; the default g++ 9 can't), `libsecret-1-dev`, ImageMagick.
 
 There is no typecheck step: upstream's checker (`effect-tsgo tsrs`) is a binary that needs

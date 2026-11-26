@@ -80,8 +80,11 @@ EOF
 CXX_ENV=()
 command -v g++-10 >/dev/null && CXX_ENV=(CC=gcc-10 CXX=g++-10)
 
+# Vite+ 1.8 runs `pnpm` from PATH instead of going through corepack.
+PNPM_SHIM=$STATE/bin
+
 with_build_env() {
-  env "${CXX_ENV[@]}" PATH="$NODE_BIN:$BUILD/node_modules/.bin:$HOME/.cargo/bin:$PATH" \
+  env "${CXX_ENV[@]}" PATH="$NODE_BIN:$PNPM_SHIM:$BUILD/node_modules/.bin:$HOME/.cargo/bin:$PATH" \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CARGO_BUILD_JOBS=$JOBS MAKEFLAGS=-j$JOBS JOBS=$JOBS \
     T3CODE_TELEMETRY_CHANNEL=dev nice -n 10 "$@"
 }
@@ -179,6 +182,8 @@ cmd_run() {
   new_tip=$(git rev-parse HEAD)
 
   cp .env.example .env
+  mkdir -p "$PNPM_SHIM"
+  step "pnpm shim" with_build_env corepack enable --install-directory "$PNPM_SHIM" pnpm
   step "install deps" with_build_env corepack pnpm install --frozen-lockfile --child-concurrency=$JOBS
   step "stamp version" with_build_env node scripts/update-release-package-versions.ts "$version"
   step "build web, server, desktop" with_build_env vp run --concurrency-limit "$JOBS" build:desktop
